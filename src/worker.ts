@@ -87,6 +87,28 @@ export default {
           items: results
         });
       }
+// 新增单次课程（第几周一次）
+if (path === "/api/course/add_once" && req.method === "POST") {
+  const body = await req.json();
+  const class_id = Number(body.class_id);
+  const title = String(body.title || "").trim();
+  const week = Number(body.week || 1);
+  const weekday = Number(body.weekday);
+  const start_time = String(body.start_time || "").trim();
+  const end_time = String(body.end_time || "").trim();
+
+  if (!class_id || !title) return bad("请填写：班级、课程名");
+  if (!(weekday >= 1 && weekday <= 7)) return bad("周几必须是 1-7");
+  const s = toMin(start_time), e = toMin(end_time);
+  if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return bad("时间格式错误：HH:MM 且结束>开始");
+  if (!week || week < 1) return bad("周次必须≥1");
+
+  await env.DB.prepare(
+    "INSERT INTO course_instances(class_id,title,week,weekday,start_time,end_time) VALUES(?,?,?,?,?,?)"
+  ).bind(class_id, title, week, weekday, start_time, end_time).run();
+
+  return json({ ok: true });
+}
 
       /* ---------- 一键生成课表 ---------- */
       if (path === "/api/solve" && req.method === "POST") {
