@@ -1,4 +1,4 @@
-name = "classroom-scheduler"
+name = "jiaoshi"
 main = "src/worker.ts"
 compatibility_date = "2025-01-01"
 
@@ -8,4 +8,4 @@ directory = "./public"
 [[d1_databases]]
 binding = "DB"
 database_name = "classroom_db"
-database_id = "稍后在Cloudflare里绑定D1后可不填或留空"
+database_id = "543aeb14-bef2-4570-a97a-d08489032d72"
