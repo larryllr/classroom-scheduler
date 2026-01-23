@@ -1,0 +1,11 @@
+name = "classroom-scheduler"
+main = "src/worker.ts"
+compatibility_date = "2025-01-01"
+
+[assets]
+directory = "./public"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "classroom_db"
+database_id = "稍后Cloudflare网页里填"
