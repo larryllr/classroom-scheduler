@@ -1,322 +1,206 @@
-export interface Env {
-  DB: D1Database;
-  ASSETS: Fetcher; // 静态资源
+const $ = (s) => document.querySelector(s);
+
+async function jget(url){
+  const r = await fetch(url);
+  return r.json();
 }
-
-/* ========== 工具函数 ========== */
-
-function json(data: any, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "access-control-allow-origin": "*",
-      "access-control-allow-methods": "GET,POST,OPTIONS",
-      "access-control-allow-headers": "*",
-    },
+async function jpost(url, body){
+  const r = await fetch(url, {
+    method:"POST",
+    headers:{ "content-type":"application/json" },
+    body: JSON.stringify(body)
   });
+  return r.json();
 }
 
-function bad(message: string, status = 400) {
-  return json({ ok: false, message }, status);
+function ui(){
+  $("#app").innerHTML = `
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">
+    <button onclick="tab('rooms')">① 教室</button>
+    <button onclick="tab('classes')">② 班级</button>
+    <button onclick="tab('courses')">③ 课程</button>
+    <button onclick="solve()">④ 一键生成</button>
+    <button onclick="tab('timetable')">⑤ 课表复制</button>
+  </div>
+  <div id="box"></div>
+  <div id="msg" style="margin-top:10px;color:#b00020"></div>
+  `;
 }
+ui();
 
-// "08:30" -> 分钟
-function toMin(t: string): number {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(t);
-  if (!m) return NaN;
-  return Number(m[1]) * 60 + Number(m[2]);
-}
+let state = { rooms:[], classes:[] };
 
-// 时间段是否重叠
-function overlap(a1: number, a2: number, b1: number, b2: number) {
-  return a1 < b2 && b1 < a2;
-}
-
-/* ========== Worker ========== */
-
-export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
-    if (req.method === "OPTIONS") return json({ ok: true });
-
-    const url = new URL(req.url);
-    const path = url.pathname;
-
-    // 非 /api 走静态资源
-    if (!path.startsWith("/api")) {
-      return env.ASSETS.fetch(req);
-    }
-
-    try {
-      /* ---------- 教室：查询 ---------- */
-      if (path === "/api/rooms" && req.method === "GET") {
-        const { results } = await env.DB.prepare(
-          "SELECT * FROM rooms ORDER BY priority ASC, capacity ASC"
-        ).all();
-        return json(results);
-      }
-
-      /* ---------- 教室：新增 ---------- */
-      if (path === "/api/rooms" && req.method === "POST") {
-        const body = await req.json();
-        const name = String(body.name || "").trim();
-        const capacity = Number(body.capacity);
-        const priority = Number(body.priority ?? 100);
-
-        if (!name) return bad("请填写教室名称");
-        if (!Number.isFinite(capacity) || capacity <= 0) return bad("容量必须是正数");
-        if (!Number.isFinite(priority)) return bad("优先级必须是数字");
-
-        await env.DB.prepare(
-          "INSERT INTO rooms(name,capacity,priority) VALUES (?,?,?)"
-        ).bind(name, capacity, priority).run();
-
-        return json({ ok: true });
-      }
-
-      /* ---------- 班级：查询（带友好显示的优先教室） ---------- */
-      if (path === "/api/classes" && req.method === "GET") {
-        const { results } = await env.DB.prepare(`
-          SELECT c.*,
-            (
-              SELECT GROUP_CONCAT(r.name, '>')
-              FROM rooms r
-              WHERE ',' || IFNULL(c.preferred_room_ids,'') || ',' LIKE '%,' || r.id || ',%'
-            ) AS preferred_rooms
-          FROM classes c
-          ORDER BY c.id DESC
-        `).all();
-        return json(results);
-      }
-
-      /* ---------- 班级：新增（含 preferred_room_ids） ---------- */
-      if (path === "/api/classes" && req.method === "POST") {
-        const body = await req.json();
-        const name = String(body.name || "").trim();
-        const size = Number(body.size);
-        const allow_switch = body.allow_switch ? 1 : 0;
-        const preferred_room_ids = String(body.preferred_room_ids || "").trim(); // "1,3,5"
-
-        if (!name) return bad("请填写班级名称");
-        if (!Number.isFinite(size) || size <= 0) return bad("人数必须是正数");
-
-        await env.DB.prepare(
-          "INSERT INTO classes(name,size,allow_switch,preferred_room_ids) VALUES (?,?,?,?)"
-        ).bind(name, size, allow_switch, preferred_room_ids).run();
-
-        return json({ ok: true });
-      }
-
-      /* ---------- 课程：新增（单次，按周次） ---------- */
-      if (path === "/api/course/add_once" && req.method === "POST") {
-        const body = await req.json();
-        const class_id = Number(body.class_id);
-        const title = String(body.title || "").trim();
-        const week = Number(body.week || 1);
-        const weekday = Number(body.weekday);
-        const start_time = String(body.start_time || "").trim();
-        const end_time = String(body.end_time || "").trim();
-
-        if (!class_id) return bad("请选择班级");
-        if (!title) return bad("请填写课程名");
-        if (!Number.isFinite(week) || week < 1) return bad("周次必须≥1");
-        if (!(weekday >= 1 && weekday <= 7)) return bad("周几必须是 1-7");
-
-        const s = toMin(start_time), e = toMin(end_time);
-        if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) {
-          return bad("时间格式错误：请用 HH:MM 且 结束>开始");
-        }
-
-        await env.DB.prepare(
-          "INSERT INTO course_instances(class_id,title,week,weekday,start_time,end_time) VALUES(?,?,?,?,?,?)"
-        ).bind(class_id, title, week, weekday, start_time, end_time).run();
-
-        return json({ ok: true });
-      }
-
-      /* ---------- 课表：查询（按班级+周次） ---------- */
-      if (path.startsWith("/api/timetable/class/") && req.method === "GET") {
-        const classId = Number(path.split("/").pop());
-        const week = Number(url.searchParams.get("week") || 1);
-
-        const cls = await env.DB.prepare(
-          "SELECT * FROM classes WHERE id=?"
-        ).bind(classId).first();
-
-        if (!cls) return bad("班级不存在", 404);
-
-        const { results } = await env.DB.prepare(`
-          SELECT ci.weekday, ci.start_time, ci.end_time,
-                 ci.title, r.name AS room_name
-          FROM course_instances ci
-          LEFT JOIN assignments a ON a.course_instance_id = ci.id
-          LEFT JOIN rooms r ON r.id = a.room_id
-          WHERE ci.class_id=? AND ci.week=?
-          ORDER BY ci.weekday, ci.start_time
-        `).bind(classId, week).all();
-
-        return json({
-          class_name: (cls as any).name,
-          week,
-          items: results
-        });
-      }
-
-      /* ---------- 一键生成（强制：当天不窜教室 + 班级优先教室） ---------- */
-      if (path === "/api/solve" && req.method === "POST") {
-        const rooms = (await env.DB.prepare("SELECT * FROM rooms").all()).results as any[];
-        const classes = (await env.DB.prepare("SELECT * FROM classes").all()).results as any[];
-        const courses = (await env.DB.prepare("SELECT * FROM course_instances").all()).results as any[];
-
-        if (!rooms.length) return bad("还没有教室");
-        if (!classes.length) return bad("还没有班级");
-        if (!courses.length) return bad("还没有课程");
-
-        // 清空旧分配
-        await env.DB.prepare("DELETE FROM assignments").run();
-
-        // 教室排序（基础优先级）
-        rooms.sort((a, b) => (a.priority - b.priority) || (a.capacity - b.capacity));
-
-        const classById = new Map<number, any>();
-        for (const c of classes) classById.set(Number(c.id), c);
-
-        // 班级优先教室：把 preferred_room_ids 排在最前，其余按默认 rooms 顺序
-        function orderedRoomsForClass(cls: any) {
-          const pref = String(cls.preferred_room_ids || "").trim();
-          if (!pref) return rooms;
-          const ids = pref.split(",").map(x => Number(x)).filter(Boolean);
-          const prefRooms = ids.map(id => rooms.find(r => Number(r.id) === id)).filter(Boolean) as any[];
-          const rest = rooms.filter(r => !ids.includes(Number(r.id)));
-          return [...prefRooms, ...rest];
-        }
-
-        // 占用表：occupied[roomId][week-day] = [{s,e},...]
-        const occupied: Record<string, Record<string, Array<{ s: number; e: number }>>> = {};
-
-        function isFree(roomId: number, key: string, s: number, e: number) {
-          const rid = String(roomId);
-          const list = occupied[rid]?.[key] || [];
-          return !list.some(x => overlap(s, e, x.s, x.e));
-        }
-        function occupy(roomId: number, key: string, s: number, e: number) {
-          const rid = String(roomId);
-          occupied[rid] ??= {};
-          occupied[rid][key] ??= [];
-          occupied[rid][key].push({ s, e });
-        }
-
-        // 规范化课程
-        const normCourses = courses.map((c) => {
-          const cls = classById.get(Number(c.class_id));
-          const s = toMin(String(c.start_time));
-          const e = toMin(String(c.end_time));
-          if (!cls) throw new Error(`课程(${c.id}) 的班级不存在`);
-          if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) {
-            throw new Error(`课程「${c.title}」时间格式错误（HH:MM 且结束>开始）`);
-          }
-          return {
-            ...c,
-            _s: s,
-            _e: e,
-            _cls: cls,
-            _key: `${c.week}-${c.weekday}`,                    // 同一天 key
-            _groupKey: `${c.class_id}-${c.week}-${c.weekday}`, // 班级当天 key
-          };
-        });
-
-        // 分组：allow_switch=0 -> 同一天同教室
-        const fixedGroups = new Map<string, any[]>();
-        const flexCourses: any[] = [];
-
-        for (const c of normCourses) {
-          const allow = Number(c._cls.allow_switch);
-          if (allow === 0) {
-            if (!fixedGroups.has(c._groupKey)) fixedGroups.set(c._groupKey, []);
-            fixedGroups.get(c._groupKey)!.push(c);
-          } else {
-            flexCourses.push(c);
-          }
-        }
-
-        // 固定组排序（稳定输出）
-        const fixedGroupList = Array.from(fixedGroups.entries()).sort((a, b) => {
-          const [ac, aw, ad] = a[0].split("-").map(Number);
-          const [bc, bw, bd] = b[0].split("-").map(Number);
-          return aw - bw || ad - bd || ac - bc;
-        });
-
-        // 1) 先排“当天不窜教室”的组
-        for (const [, arr] of fixedGroupList) {
-          arr.sort((x, y) => x._s - y._s);
-          const cls = arr[0]._cls;
-          const size = Number(cls.size);
-
-          let chosenRoom: any = null;
-
-          for (const r of orderedRoomsForClass(cls)) {
-            if (Number(r.capacity) < size) continue;
-
-            let ok = true;
-            for (const c of arr) {
-              if (!isFree(Number(r.id), c._key, c._s, c._e)) {
-                ok = false;
-                break;
-              }
-            }
-            if (ok) { chosenRoom = r; break; }
-          }
-
-          if (!chosenRoom) {
-            const anyC = arr[0];
-            return bad(
-              `无可行解：班级「${cls.name}」第${anyC.week}周 周${anyC.weekday} 设置为“当天不换教室”，但没有任何教室可同时容纳且不冲突。`
-            );
-          }
-
-          for (const c of arr) {
-            occupy(Number(chosenRoom.id), c._key, c._s, c._e);
-            await env.DB.prepare(
-              "INSERT INTO assignments(course_instance_id, room_id) VALUES (?,?)"
-            ).bind(c.id, chosenRoom.id).run();
-          }
-        }
-
-        // 2) 再排允许换教室的课程
-        flexCourses.sort((a, b) => a.week - b.week || a.weekday - b.weekday || a._s - b._s);
-
-        for (const c of flexCourses) {
-          const cls = c._cls;
-          const size = Number(cls.size);
-
-          let placed = false;
-          for (const r of orderedRoomsForClass(cls)) {
-            if (Number(r.capacity) < size) continue;
-            if (!isFree(Number(r.id), c._key, c._s, c._e)) continue;
-
-            occupy(Number(r.id), c._key, c._s, c._e);
-            await env.DB.prepare(
-              "INSERT INTO assignments(course_instance_id, room_id) VALUES (?,?)"
-            ).bind(c.id, r.id).run();
-
-            placed = true;
-            break;
-          }
-
-          if (!placed) {
-            return bad(
-              `无可行解：第${c.week}周 周${c.weekday} ${c.start_time}-${c.end_time}（${cls.name} - ${c.title}）没有可用教室（容量/冲突）。`
-            );
-          }
-        }
-
-        return json({ ok: true, message: "课表生成完成（已强制：当天不换教室 + 班级优先教室）" });
-      }
-
-      return bad("接口不存在", 404);
-
-    } catch (e: any) {
-      return bad(e?.message || "服务器错误", 500);
-    }
-  },
+window.tab = async (t)=>{
+  $("#msg").innerText="";
+  if(t==="rooms") return renderRooms();
+  if(t==="classes") return renderClasses();
+  if(t==="courses") return renderCourses();
+  if(t==="timetable") return renderTimetable();
 };
+
+async function renderRooms(){
+  state.rooms = await jget("/api/rooms");
+  $("#box").innerHTML = `
+  <h3>教室</h3>
+  <div style="display:grid;gap:6px;max-width:420px">
+    <input id="rname" placeholder="教室名称，如 A101" />
+    <input id="rcap" type="number" placeholder="容量，如 60" />
+    <input id="rpri" type="number" placeholder="优先级(越小越优先)，如 1" />
+    <button onclick="addRoom()">新增教室</button>
+  </div>
+  <pre style="background:#fff;border:1px solid #ddd;padding:10px;border-radius:8px;margin-top:10px;overflow:auto">
+${state.rooms.map(r=>`${r.id}. ${r.name}  容量:${r.capacity}  优先级:${r.priority}`).join("\n") || "（暂无教室）"}
+  </pre>
+  `;
+}
+
+window.addRoom = async ()=>{
+  const name = $("#rname").value.trim();
+  const capacity = Number($("#rcap").value);
+  const priority = Number($("#rpri").value || 100);
+  const r = await jpost("/api/rooms", { name, capacity, priority });
+  if(r.ok===false) return $("#msg").innerText = r.message;
+  $("#msg").innerText="✅ 已新增教室";
+  renderRooms();
+};
+
+async function renderClasses(){
+  state.rooms = await jget("/api/rooms");
+  state.classes = await jget("/api/classes");
+
+  $("#box").innerHTML = `
+  <h3>班级</h3>
+  <div style="display:grid;gap:6px;max-width:520px">
+    <input id="cname" placeholder="班级名称，如 软件2301" />
+    <input id="csize" type="number" placeholder="人数，如 48" />
+
+    <label style="display:flex;gap:6px;align-items:center">
+      <input id="cswitch" type="checkbox" checked />
+      当天允许换教室（不勾选=当天固定同一教室）
+    </label>
+
+    <div style="border:1px solid #ddd;border-radius:8px;padding:10px;background:#fff">
+      <div style="margin-bottom:6px;font-weight:600">优先教室（可多选；页面顺序=优先顺序）</div>
+      <div id="prooms" style="display:grid;gap:4px;max-height:160px;overflow:auto"></div>
+      <div style="color:#666;margin-top:6px">提示：优先教室不够用时，会自动用其他教室补。</div>
+    </div>
+
+    <button onclick="addClass()">新增班级</button>
+  </div>
+
+  <pre id="clist" style="background:#fff;border:1px solid #ddd;padding:10px;border-radius:8px;margin-top:10px;overflow:auto"></pre>
+  `;
+
+  $("#clist").innerText = state.classes.map(c =>
+    `${c.id}. ${c.name}  人数:${c.size}  当天可换教室:${c.allow_switch? "是":"否"}  优先教室:${c.preferred_rooms || "无"}`
+  ).join("\n") || "（暂无班级）";
+
+  const box = $("#prooms");
+  box.innerHTML = state.rooms.map(r=>`
+    <label style="display:flex;gap:6px;align-items:center">
+      <input type="checkbox" value="${r.id}"> ${r.name}（容量${r.capacity}，优先级${r.priority}）
+    </label>
+  `).join("");
+}
+
+window.addClass = async ()=>{
+  const name = $("#cname").value.trim();
+  const size = Number($("#csize").value);
+  const allow_switch = $("#cswitch").checked;
+
+  const checks = Array.from(document.querySelectorAll('#prooms input[type="checkbox"]:checked'));
+  const preferred_room_ids = checks.map(x=>x.value).join(",");
+
+  const r = await jpost("/api/classes", { name, size, allow_switch, preferred_room_ids });
+  if(r.ok===false) return $("#msg").innerText = r.message;
+  $("#msg").innerText="✅ 已新增班级";
+  renderClasses();
+};
+
+async function renderCourses(){
+  state.classes = await jget("/api/classes");
+  $("#box").innerHTML = `
+  <h3>课程（按时间段，不需要设置第几节）</h3>
+  <div style="display:grid;gap:6px;max-width:520px">
+    <select id="cid">
+      ${state.classes.map(c=>`<option value="${c.id}">${c.name}（${c.size}人）</option>`).join("")}
+    </select>
+    <input id="ctitle" placeholder="课程名，如 高等数学" />
+    <input id="cweek" type="number" placeholder="周次，如 1" value="1" />
+    <select id="cday">
+      <option value="1">周一</option><option value="2">周二</option><option value="3">周三</option>
+      <option value="4">周四</option><option value="5">周五</option><option value="6">周六</option><option value="7">周日</option>
+    </select>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <input id="cstart" placeholder="开始 HH:MM 如 08:30" style="flex:1" />
+      <input id="cend" placeholder="结束 HH:MM 如 10:05" style="flex:1" />
+    </div>
+    <button onclick="addCourse()">新增课程（单次/按周次）</button>
+  </div>
+  <div style="margin-top:10px;color:#666">提示：先录课程 → 点“一键生成” → 去“课表复制”。</div>
+  `;
+}
+
+window.addCourse = async ()=>{
+  const class_id = Number($("#cid").value);
+  const title = $("#ctitle").value.trim();
+  const week = Number($("#cweek").value || 1);
+  const weekday = Number($("#cday").value);
+  const start_time = $("#cstart").value.trim();
+  const end_time = $("#cend").value.trim();
+
+  const r = await jpost("/api/course/add_once", { class_id, title, week, weekday, start_time, end_time });
+  if(r.ok===false) return $("#msg").innerText = r.message;
+  $("#msg").innerText="✅ 已新增课程";
+};
+
+window.solve = async ()=>{
+  const r = await jpost("/api/solve", {});
+  $("#msg").innerText = r.ok===false ? ("❌ "+r.message) : "✅ 生成成功！去“课表复制”复制发群";
+};
+
+async function renderTimetable(){
+  state.classes = await jget("/api/classes");
+  $("#box").innerHTML = `
+  <h3>课表复制（时间 + 教室）</h3>
+  <div style="display:grid;gap:6px;max-width:520px">
+    <select id="ttcid">
+      ${state.classes.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}
+    </select>
+    <input id="ttweek" type="number" value="1" placeholder="周次" />
+    <button onclick="loadTT()">加载课表</button>
+    <button onclick="copyTT()">复制发群</button>
+  </div>
+  <pre id="tt" style="background:#fff;border:1px solid #ddd;padding:10px;border-radius:8px;margin-top:10px;white-space:pre-wrap"></pre>
+  `;
+}
+
+window.loadTT = async ()=>{
+  const cid = Number($("#ttcid").value);
+  const week = Number($("#ttweek").value || 1);
+  const t = await jget(`/api/timetable/class/${cid}?week=${week}`);
+
+  let txt = `【${t.class_name} 第${t.week}周课表】\n\n`;
+  const dayName = ["","周一","周二","周三","周四","周五","周六","周日"];
+  let curDay = -1;
+
+  t.items.forEach(i=>{
+    if(i.weekday !== curDay){
+      curDay = i.weekday;
+      txt += `${dayName[curDay]}\n`;
+    }
+    txt += `${i.start_time}-${i.end_time}  ${i.title}  教室：${i.room_name || "未分配"}\n`;
+  });
+
+  $("#tt").innerText = txt;
+};
+
+window.copyTT = async ()=>{
+  const text = $("#tt").innerText || "";
+  if(!text.trim()) return alert("先点“加载课表”");
+  await navigator.clipboard.writeText(text);
+  alert("已复制，可直接发群");
+};
+
+// 默认进入教室页
+tab("rooms");
