@@ -1,14 +1,16 @@
 {
   "name": "kuankuan-classroom-scheduler-offline",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "main": "main.js",
   "scripts": {
+    "postinstall": "electron-builder install-app-deps",
     "pack": "electron-builder --win --x64"
   },
   "build": {
     "appId": "com.kuankuan.classroom.scheduler",
     "productName": "宽宽牌教室分配系统（离线版）",
+    "npmRebuild": true,
     "directories": { "output": "dist" },
     "files": [
       "main.js",
@@ -32,7 +34,7 @@
     "express": "^4.19.2"
   },
   "devDependencies": {
-    "electron": "^30.0.0",
+    "electron": "^28.3.0",
     "electron-builder": "^24.13.3"
   }
 }
