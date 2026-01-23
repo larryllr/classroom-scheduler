@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6ea8ff"/>
+      <stop offset="1" stop-color="#45d483"/>
+    </linearGradient>
+  </defs>
+  <rect x="40" y="40" width="432" height="432" rx="96" fill="url(#g)"/>
+  <rect x="120" y="150" width="272" height="54" rx="16" fill="rgba(11,18,32,.85)"/>
+  <rect x="120" y="232" width="272" height="54" rx="16" fill="rgba(11,18,32,.85)"/>
+  <rect x="120" y="314" width="200" height="54" rx="16" fill="rgba(11,18,32,.85)"/>
+  <text x="256" y="118" text-anchor="middle" font-size="34" font-family="Arial" fill="#0b1220" font-weight="800">宽宽牌</text>
+</svg>
