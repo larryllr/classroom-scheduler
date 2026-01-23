@@ -17,6 +17,7 @@ function json(data: any, status = 200) {
 function bad(message: string, status = 400) {
   return json({ ok: false, message }, status);
 }
+
 function toMin(t: string): number {
   const m = /^(\d{1,2}):(\d{2})$/.exec(t);
   if (!m) return NaN;
@@ -36,7 +37,7 @@ export default {
     const url = new URL(req.url);
     const path = url.pathname;
 
-    // 非 /api 走静态
+    // 非 /api 走静态资源
     if (!path.startsWith("/api")) return env.ASSETS.fetch(req);
 
     try {
@@ -68,7 +69,7 @@ export default {
       if (path.startsWith("/api/rooms/") && req.method === "DELETE") {
         const id = Number(path.split("/").pop());
         if (!id) return bad("教室ID错误");
-        // 先删分配（防止残留）
+
         await env.DB.prepare("DELETE FROM assignments WHERE room_id=?").bind(id).run();
         await env.DB.prepare("DELETE FROM rooms WHERE id=?").bind(id).run();
         return json({ ok: true });
@@ -99,7 +100,6 @@ export default {
         if (!name) return bad("请填写班级名称");
         if (!Number.isFinite(size) || size <= 0) return bad("人数必须是正数");
 
-        // 有些旧库没有列 preferred_room_ids：这里兼容
         await env.DB.prepare(
           "INSERT INTO classes(name,size,allow_switch,preferred_room_ids) VALUES (?,?,?,?)"
         ).bind(name, size, allow_switch, preferred_room_ids).run();
@@ -110,21 +110,24 @@ export default {
       if (path.startsWith("/api/classes/") && req.method === "DELETE") {
         const id = Number(path.split("/").pop());
         if (!id) return bad("班级ID错误");
-        // 删课程、删分配、删班级
+
         const { results: courseIds } = await env.DB.prepare(
           "SELECT id FROM course_instances WHERE class_id=?"
         ).bind(id).all();
-        for (const c of courseIds as any[]) {
-          await env.DB.prepare("DELETE FROM assignments WHERE course_instance_id=?").bind(c.id).run();
-        }
+
+        // 批量删 assignments
+        const delAssignStmts = (courseIds as any[]).map((c) =>
+          env.DB.prepare("DELETE FROM assignments WHERE course_instance_id=?").bind(c.id)
+        );
+        if (delAssignStmts.length) await env.DB.batch(delAssignStmts);
+
         await env.DB.prepare("DELETE FROM course_instances WHERE class_id=?").bind(id).run();
         await env.DB.prepare("DELETE FROM classes WHERE id=?").bind(id).run();
+
         return json({ ok: true });
       }
 
       /* ---------------- 课程（按日期） ---------------- */
-
-      // 查询课程（用于列表展示）
       if (path === "/api/courses" && req.method === "GET") {
         const class_id = Number(url.searchParams.get("class_id") || 0);
         let sql = `
@@ -144,7 +147,10 @@ export default {
         return json(res.results);
       }
 
-      // 新增课程：一次选择多个日期
+      /**
+       * ✅ 新增课程：一次选多个日期 —— 批量写入提速
+       * body: { class_id, title, dates:[YYYY-MM-DD...], start_time, end_time }
+       */
       if (path === "/api/course/add_dates" && req.method === "POST") {
         const body = await req.json();
         const class_id = Number(body.class_id);
@@ -156,26 +162,31 @@ export default {
         if (!class_id) return bad("请选择班级");
         if (!title) return bad("请填写课程名");
         if (!dates.length) return bad("请从日历选择至少1个日期");
-        if (dates.some(d => !isDate(d))) return bad("日期格式错误");
+        if (dates.some((d) => !isDate(d))) return bad("日期格式错误");
         const s = toMin(start_time), e = toMin(end_time);
         if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) {
           return bad("时间格式错误：HH:MM 且 结束>开始");
         }
 
-        // 写入多条
-        for (const d of dates) {
-          await env.DB.prepare(
-            "INSERT INTO course_instances(class_id,title,date,start_time,end_time) VALUES(?,?,?,?,?)"
-          ).bind(class_id, title, d, start_time, end_time).run();
-        }
+        // 去重 + 排序，避免重复点日期导致多条相同记录
+        const uniq = Array.from(new Set(dates)).sort();
 
-        return json({ ok: true });
+        // ✅ 批量写入（一次 batch）
+        const stmts = uniq.map((d) =>
+          env.DB.prepare(
+            "INSERT INTO course_instances(class_id,title,date,start_time,end_time) VALUES(?,?,?,?,?)"
+          ).bind(class_id, title, d, start_time, end_time)
+        );
+
+        await env.DB.batch(stmts);
+
+        return json({ ok: true, count: uniq.length });
       }
 
-      // 删除课程（按 course_instances.id）
       if (path.startsWith("/api/course/") && req.method === "DELETE") {
         const id = Number(path.split("/").pop());
         if (!id) return bad("课程ID错误");
+
         await env.DB.prepare("DELETE FROM assignments WHERE course_instance_id=?").bind(id).run();
         await env.DB.prepare("DELETE FROM course_instances WHERE id=?").bind(id).run();
         return json({ ok: true });
@@ -209,7 +220,7 @@ export default {
         return json({ class_name: (cls as any).name, items: results });
       }
 
-      /* ---------------- 一键排教室（强制：当天不窜 + 班级优先教室） ---------------- */
+      /* ---------------- 一键排教室（写入 assignments 批量提速） ---------------- */
       if (path === "/api/solve" && req.method === "POST") {
         const rooms = (await env.DB.prepare("SELECT * FROM rooms").all()).results as any[];
         const classes = (await env.DB.prepare("SELECT * FROM classes").all()).results as any[];
@@ -219,7 +230,6 @@ export default {
         if (!classes.length) return bad("还没有班级");
         if (!courses.length) return bad("还没有课程");
 
-        // 清空旧分配
         await env.DB.prepare("DELETE FROM assignments").run();
 
         rooms.sort((a, b) => (a.priority - b.priority) || (a.capacity - b.capacity));
@@ -230,9 +240,9 @@ export default {
         function orderedRoomsForClass(cls: any) {
           const pref = String(cls.preferred_room_ids || "").trim();
           if (!pref) return rooms;
-          const ids = pref.split(",").map(x => Number(x)).filter(Boolean);
-          const prefRooms = ids.map(id => rooms.find(r => Number(r.id) === id)).filter(Boolean) as any[];
-          const rest = rooms.filter(r => !ids.includes(Number(r.id)));
+          const ids = pref.split(",").map((x: string) => Number(x)).filter(Boolean);
+          const prefRooms = ids.map((id: number) => rooms.find(r => Number(r.id) === id)).filter(Boolean) as any[];
+          const rest = rooms.filter((r: any) => !ids.includes(Number(r.id)));
           return [...prefRooms, ...rest];
         }
 
@@ -250,12 +260,12 @@ export default {
           occupied[rid][date].push({ s, e });
         }
 
-        // 规范化课程（必须有 date）
-        const norm = courses.map(c => {
+        // 规范化课程
+        const norm = courses.map((c) => {
           const cls = classById.get(Number(c.class_id));
           const date = String(c.date || "").trim();
           if (!cls) throw new Error("课程对应班级不存在");
-          if (!isDate(date)) throw new Error(`课程「${c.title}」缺少日期（请用新日历方式新增课程）`);
+          if (!isDate(date)) throw new Error(`课程「${c.title}」缺少日期（请用日历方式新增课程）`);
           const s = toMin(String(c.start_time));
           const e = toMin(String(c.end_time));
           if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) {
@@ -287,6 +297,9 @@ export default {
 
         const fixedList = Array.from(fixedGroups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
 
+        // ✅ 收集 assignments 批量插入
+        const assignmentRows: Array<{ course_instance_id: number; room_id: number }> = [];
+
         // 1) 固定组先排
         for (const [, arr] of fixedList) {
           arr.sort((x, y) => x._s - y._s);
@@ -310,9 +323,7 @@ export default {
 
           for (const c of arr) {
             occupy(Number(chosen.id), date, c._s, c._e);
-            await env.DB.prepare(
-              "INSERT INTO assignments(course_instance_id, room_id) VALUES (?,?)"
-            ).bind(c.id, chosen.id).run();
+            assignmentRows.push({ course_instance_id: Number(c.id), room_id: Number(chosen.id) });
           }
         }
 
@@ -330,10 +341,7 @@ export default {
             if (!isFree(Number(r.id), date, c._s, c._e)) continue;
 
             occupy(Number(r.id), date, c._s, c._e);
-            await env.DB.prepare(
-              "INSERT INTO assignments(course_instance_id, room_id) VALUES (?,?)"
-            ).bind(c.id, r.id).run();
-
+            assignmentRows.push({ course_instance_id: Number(c.id), room_id: Number(r.id) });
             placed = true;
             break;
           }
@@ -343,7 +351,16 @@ export default {
           }
         }
 
-        return json({ ok: true, message: "排课完成（当天不换教室 + 班级优先教室）" });
+        // ✅ 一次 batch 写入所有分配
+        if (assignmentRows.length) {
+          const stmts = assignmentRows.map((x) =>
+            env.DB.prepare("INSERT INTO assignments(course_instance_id, room_id) VALUES (?,?)")
+              .bind(x.course_instance_id, x.room_id)
+          );
+          await env.DB.batch(stmts);
+        }
+
+        return json({ ok: true, message: "排课完成（已提速批量写入）" });
       }
 
       return bad("接口不存在", 404);
