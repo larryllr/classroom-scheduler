@@ -82,6 +82,28 @@
     .day.on{background: rgba(110,168,255,.20);border-color: rgba(110,168,255,.45)}
     .dow{color:var(--muted);font-size:12px;text-align:center}
     pre{white-space:pre-wrap;background:rgba(255,255,255,.04);border:1px solid var(--line);padding:12px;border-radius:14px}
+
+    /* ✅ 修复：日期选择器/下拉在部分浏览器强制白底，导致白字看不见 */
+    input[type="date"],
+    input[type="time"],
+    select{
+      background: rgba(255,255,255,.92) !important;
+      color: #0b1220 !important;
+      border-color: rgba(0,0,0,.15) !important;
+    }
+    input[type="date"]::-webkit-datetime-edit,
+    input[type="time"]::-webkit-datetime-edit{
+      color:#0b1220 !important;
+    }
+    option{ color:#0b1220; }
+
+    /* 其它输入框继续深色风格 */
+    input:not([type="date"]):not([type="time"]),
+    textarea{
+      background: rgba(255,255,255,.05);
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
   </style>
 </head>
 <body>
