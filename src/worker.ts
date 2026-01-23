@@ -1,9 +1,7 @@
 export interface Env {
   DB: D1Database;
-  ASSETS: Fetcher; // 静态资源
+  ASSETS: Fetcher;
 }
-
-/* ========== 工具函数 ========== */
 
 function json(data: any, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -11,29 +9,25 @@ function json(data: any, status = 200) {
     headers: {
       "content-type": "application/json; charset=utf-8",
       "access-control-allow-origin": "*",
-      "access-control-allow-methods": "GET,POST,OPTIONS",
+      "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
       "access-control-allow-headers": "*",
     },
   });
 }
-
 function bad(message: string, status = 400) {
   return json({ ok: false, message }, status);
 }
-
-// "08:30" -> 分钟
 function toMin(t: string): number {
   const m = /^(\d{1,2}):(\d{2})$/.exec(t);
   if (!m) return NaN;
   return Number(m[1]) * 60 + Number(m[2]);
 }
-
-// 时间段是否重叠
 function overlap(a1: number, a2: number, b1: number, b2: number) {
   return a1 < b2 && b1 < a2;
 }
-
-/* ========== Worker ========== */
+function isDate(d: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(d);
+}
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
@@ -42,13 +36,11 @@ export default {
     const url = new URL(req.url);
     const path = url.pathname;
 
-    // 非 /api 走静态资源
-    if (!path.startsWith("/api")) {
-      return env.ASSETS.fetch(req);
-    }
+    // 非 /api 走静态
+    if (!path.startsWith("/api")) return env.ASSETS.fetch(req);
 
     try {
-      /* ---------- 教室：查询 ---------- */
+      /* ---------------- 教室 ---------------- */
       if (path === "/api/rooms" && req.method === "GET") {
         const { results } = await env.DB.prepare(
           "SELECT * FROM rooms ORDER BY priority ASC, capacity ASC"
@@ -56,7 +48,6 @@ export default {
         return json(results);
       }
 
-      /* ---------- 教室：新增 ---------- */
       if (path === "/api/rooms" && req.method === "POST") {
         const body = await req.json();
         const name = String(body.name || "").trim();
@@ -74,12 +65,21 @@ export default {
         return json({ ok: true });
       }
 
-      /* ---------- 班级：查询（带友好显示的优先教室） ---------- */
+      if (path.startsWith("/api/rooms/") && req.method === "DELETE") {
+        const id = Number(path.split("/").pop());
+        if (!id) return bad("教室ID错误");
+        // 先删分配（防止残留）
+        await env.DB.prepare("DELETE FROM assignments WHERE room_id=?").bind(id).run();
+        await env.DB.prepare("DELETE FROM rooms WHERE id=?").bind(id).run();
+        return json({ ok: true });
+      }
+
+      /* ---------------- 班级 ---------------- */
       if (path === "/api/classes" && req.method === "GET") {
         const { results } = await env.DB.prepare(`
           SELECT c.*,
             (
-              SELECT GROUP_CONCAT(r.name, '>')
+              SELECT GROUP_CONCAT(r.name, ' > ')
               FROM rooms r
               WHERE ',' || IFNULL(c.preferred_room_ids,'') || ',' LIKE '%,' || r.id || ',%'
             ) AS preferred_rooms
@@ -89,7 +89,6 @@ export default {
         return json(results);
       }
 
-      /* ---------- 班级：新增（含 preferred_room_ids） ---------- */
       if (path === "/api/classes" && req.method === "POST") {
         const body = await req.json();
         const name = String(body.name || "").trim();
@@ -100,6 +99,7 @@ export default {
         if (!name) return bad("请填写班级名称");
         if (!Number.isFinite(size) || size <= 0) return bad("人数必须是正数");
 
+        // 有些旧库没有列 preferred_room_ids：这里兼容
         await env.DB.prepare(
           "INSERT INTO classes(name,size,allow_switch,preferred_room_ids) VALUES (?,?,?,?)"
         ).bind(name, size, allow_switch, preferred_room_ids).run();
@@ -107,62 +107,109 @@ export default {
         return json({ ok: true });
       }
 
-      /* ---------- 课程：新增（单次，按周次） ---------- */
-      if (path === "/api/course/add_once" && req.method === "POST") {
+      if (path.startsWith("/api/classes/") && req.method === "DELETE") {
+        const id = Number(path.split("/").pop());
+        if (!id) return bad("班级ID错误");
+        // 删课程、删分配、删班级
+        const { results: courseIds } = await env.DB.prepare(
+          "SELECT id FROM course_instances WHERE class_id=?"
+        ).bind(id).all();
+        for (const c of courseIds as any[]) {
+          await env.DB.prepare("DELETE FROM assignments WHERE course_instance_id=?").bind(c.id).run();
+        }
+        await env.DB.prepare("DELETE FROM course_instances WHERE class_id=?").bind(id).run();
+        await env.DB.prepare("DELETE FROM classes WHERE id=?").bind(id).run();
+        return json({ ok: true });
+      }
+
+      /* ---------------- 课程（按日期） ---------------- */
+
+      // 查询课程（用于列表展示）
+      if (path === "/api/courses" && req.method === "GET") {
+        const class_id = Number(url.searchParams.get("class_id") || 0);
+        let sql = `
+          SELECT ci.*, c.name AS class_name
+          FROM course_instances ci
+          LEFT JOIN classes c ON c.id=ci.class_id
+        `;
+        const binds: any[] = [];
+        if (class_id) {
+          sql += " WHERE ci.class_id=? ";
+          binds.push(class_id);
+        }
+        sql += " ORDER BY ci.date DESC, ci.start_time ASC ";
+
+        const stmt = env.DB.prepare(sql);
+        const res = binds.length ? await stmt.bind(...binds).all() : await stmt.all();
+        return json(res.results);
+      }
+
+      // 新增课程：一次选择多个日期
+      if (path === "/api/course/add_dates" && req.method === "POST") {
         const body = await req.json();
         const class_id = Number(body.class_id);
         const title = String(body.title || "").trim();
-        const week = Number(body.week || 1);
-        const weekday = Number(body.weekday);
+        const dates = Array.isArray(body.dates) ? body.dates.map(String) : [];
         const start_time = String(body.start_time || "").trim();
         const end_time = String(body.end_time || "").trim();
 
         if (!class_id) return bad("请选择班级");
         if (!title) return bad("请填写课程名");
-        if (!Number.isFinite(week) || week < 1) return bad("周次必须≥1");
-        if (!(weekday >= 1 && weekday <= 7)) return bad("周几必须是 1-7");
-
+        if (!dates.length) return bad("请从日历选择至少1个日期");
+        if (dates.some(d => !isDate(d))) return bad("日期格式错误");
         const s = toMin(start_time), e = toMin(end_time);
         if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) {
-          return bad("时间格式错误：请用 HH:MM 且 结束>开始");
+          return bad("时间格式错误：HH:MM 且 结束>开始");
         }
 
-        await env.DB.prepare(
-          "INSERT INTO course_instances(class_id,title,week,weekday,start_time,end_time) VALUES(?,?,?,?,?,?)"
-        ).bind(class_id, title, week, weekday, start_time, end_time).run();
+        // 写入多条
+        for (const d of dates) {
+          await env.DB.prepare(
+            "INSERT INTO course_instances(class_id,title,date,start_time,end_time) VALUES(?,?,?,?,?)"
+          ).bind(class_id, title, d, start_time, end_time).run();
+        }
 
         return json({ ok: true });
       }
 
-      /* ---------- 课表：查询（按班级+周次） ---------- */
+      // 删除课程（按 course_instances.id）
+      if (path.startsWith("/api/course/") && req.method === "DELETE") {
+        const id = Number(path.split("/").pop());
+        if (!id) return bad("课程ID错误");
+        await env.DB.prepare("DELETE FROM assignments WHERE course_instance_id=?").bind(id).run();
+        await env.DB.prepare("DELETE FROM course_instances WHERE id=?").bind(id).run();
+        return json({ ok: true });
+      }
+
+      /* ---------------- 课表查询（按日期范围） ---------------- */
       if (path.startsWith("/api/timetable/class/") && req.method === "GET") {
         const classId = Number(path.split("/").pop());
-        const week = Number(url.searchParams.get("week") || 1);
+        const from = String(url.searchParams.get("from") || "");
+        const to = String(url.searchParams.get("to") || "");
 
-        const cls = await env.DB.prepare(
-          "SELECT * FROM classes WHERE id=?"
-        ).bind(classId).first();
-
+        const cls = await env.DB.prepare("SELECT * FROM classes WHERE id=?")
+          .bind(classId).first();
         if (!cls) return bad("班级不存在", 404);
 
+        let where = "WHERE ci.class_id=? ";
+        const binds: any[] = [classId];
+        if (from && isDate(from)) { where += " AND ci.date>=? "; binds.push(from); }
+        if (to && isDate(to)) { where += " AND ci.date<=? "; binds.push(to); }
+
         const { results } = await env.DB.prepare(`
-          SELECT ci.weekday, ci.start_time, ci.end_time,
-                 ci.title, r.name AS room_name
+          SELECT ci.id, ci.date, ci.start_time, ci.end_time, ci.title,
+                 r.name AS room_name
           FROM course_instances ci
           LEFT JOIN assignments a ON a.course_instance_id = ci.id
           LEFT JOIN rooms r ON r.id = a.room_id
-          WHERE ci.class_id=? AND ci.week=?
-          ORDER BY ci.weekday, ci.start_time
-        `).bind(classId, week).all();
+          ${where}
+          ORDER BY ci.date ASC, ci.start_time ASC
+        `).bind(...binds).all();
 
-        return json({
-          class_name: (cls as any).name,
-          week,
-          items: results
-        });
+        return json({ class_name: (cls as any).name, items: results });
       }
 
-      /* ---------- 一键生成（强制：当天不窜教室 + 班级优先教室） ---------- */
+      /* ---------------- 一键排教室（强制：当天不窜 + 班级优先教室） ---------------- */
       if (path === "/api/solve" && req.method === "POST") {
         const rooms = (await env.DB.prepare("SELECT * FROM rooms").all()).results as any[];
         const classes = (await env.DB.prepare("SELECT * FROM classes").all()).results as any[];
@@ -175,13 +222,11 @@ export default {
         // 清空旧分配
         await env.DB.prepare("DELETE FROM assignments").run();
 
-        // 教室排序（基础优先级）
         rooms.sort((a, b) => (a.priority - b.priority) || (a.capacity - b.capacity));
 
         const classById = new Map<number, any>();
         for (const c of classes) classById.set(Number(c.id), c);
 
-        // 班级优先教室：把 preferred_room_ids 排在最前，其余按默认 rooms 顺序
         function orderedRoomsForClass(cls: any) {
           const pref = String(cls.preferred_room_ids || "").trim();
           if (!pref) return rooms;
@@ -191,110 +236,100 @@ export default {
           return [...prefRooms, ...rest];
         }
 
-        // 占用表：occupied[roomId][week-day] = [{s,e},...]
+        // occupied[roomId][date] = [{s,e}]
         const occupied: Record<string, Record<string, Array<{ s: number; e: number }>>> = {};
-
-        function isFree(roomId: number, key: string, s: number, e: number) {
+        function isFree(roomId: number, date: string, s: number, e: number) {
           const rid = String(roomId);
-          const list = occupied[rid]?.[key] || [];
+          const list = occupied[rid]?.[date] || [];
           return !list.some(x => overlap(s, e, x.s, x.e));
         }
-        function occupy(roomId: number, key: string, s: number, e: number) {
+        function occupy(roomId: number, date: string, s: number, e: number) {
           const rid = String(roomId);
           occupied[rid] ??= {};
-          occupied[rid][key] ??= [];
-          occupied[rid][key].push({ s, e });
+          occupied[rid][date] ??= [];
+          occupied[rid][date].push({ s, e });
         }
 
-        // 规范化课程
-        const normCourses = courses.map((c) => {
+        // 规范化课程（必须有 date）
+        const norm = courses.map(c => {
           const cls = classById.get(Number(c.class_id));
+          const date = String(c.date || "").trim();
+          if (!cls) throw new Error("课程对应班级不存在");
+          if (!isDate(date)) throw new Error(`课程「${c.title}」缺少日期（请用新日历方式新增课程）`);
           const s = toMin(String(c.start_time));
           const e = toMin(String(c.end_time));
-          if (!cls) throw new Error(`课程(${c.id}) 的班级不存在`);
           if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) {
             throw new Error(`课程「${c.title}」时间格式错误（HH:MM 且结束>开始）`);
           }
           return {
             ...c,
+            _cls: cls,
+            _date: date,
             _s: s,
             _e: e,
-            _cls: cls,
-            _key: `${c.week}-${c.weekday}`,                    // 同一天 key
-            _groupKey: `${c.class_id}-${c.week}-${c.weekday}`, // 班级当天 key
+            _groupKey: `${c.class_id}-${date}` // 班级当天
           };
         });
 
         // 分组：allow_switch=0 -> 同一天同教室
         const fixedGroups = new Map<string, any[]>();
-        const flexCourses: any[] = [];
+        const flex: any[] = [];
 
-        for (const c of normCourses) {
+        for (const c of norm) {
           const allow = Number(c._cls.allow_switch);
           if (allow === 0) {
             if (!fixedGroups.has(c._groupKey)) fixedGroups.set(c._groupKey, []);
             fixedGroups.get(c._groupKey)!.push(c);
           } else {
-            flexCourses.push(c);
+            flex.push(c);
           }
         }
 
-        // 固定组排序（稳定输出）
-        const fixedGroupList = Array.from(fixedGroups.entries()).sort((a, b) => {
-          const [ac, aw, ad] = a[0].split("-").map(Number);
-          const [bc, bw, bd] = b[0].split("-").map(Number);
-          return aw - bw || ad - bd || ac - bc;
-        });
+        const fixedList = Array.from(fixedGroups.entries()).sort((a, b) => a[0].localeCompare(b[0]));
 
-        // 1) 先排“当天不窜教室”的组
-        for (const [, arr] of fixedGroupList) {
+        // 1) 固定组先排
+        for (const [, arr] of fixedList) {
           arr.sort((x, y) => x._s - y._s);
           const cls = arr[0]._cls;
           const size = Number(cls.size);
+          const date = arr[0]._date;
 
-          let chosenRoom: any = null;
-
+          let chosen: any = null;
           for (const r of orderedRoomsForClass(cls)) {
             if (Number(r.capacity) < size) continue;
-
             let ok = true;
             for (const c of arr) {
-              if (!isFree(Number(r.id), c._key, c._s, c._e)) {
-                ok = false;
-                break;
-              }
+              if (!isFree(Number(r.id), date, c._s, c._e)) { ok = false; break; }
             }
-            if (ok) { chosenRoom = r; break; }
+            if (ok) { chosen = r; break; }
           }
 
-          if (!chosenRoom) {
-            const anyC = arr[0];
-            return bad(
-              `无可行解：班级「${cls.name}」第${anyC.week}周 周${anyC.weekday} 设置为“当天不换教室”，但没有任何教室可同时容纳且不冲突。`
-            );
+          if (!chosen) {
+            return bad(`无可行解：班级「${cls.name}」在 ${date} 设置为“当天不换教室”，但没有任何教室能同时容纳且不冲突。`);
           }
 
           for (const c of arr) {
-            occupy(Number(chosenRoom.id), c._key, c._s, c._e);
+            occupy(Number(chosen.id), date, c._s, c._e);
             await env.DB.prepare(
               "INSERT INTO assignments(course_instance_id, room_id) VALUES (?,?)"
-            ).bind(c.id, chosenRoom.id).run();
+            ).bind(c.id, chosen.id).run();
           }
         }
 
-        // 2) 再排允许换教室的课程
-        flexCourses.sort((a, b) => a.week - b.week || a.weekday - b.weekday || a._s - b._s);
+        // 2) 允许换教室逐条排
+        flex.sort((a, b) => (a._date.localeCompare(b._date)) || (a._s - b._s));
 
-        for (const c of flexCourses) {
+        for (const c of flex) {
           const cls = c._cls;
           const size = Number(cls.size);
+          const date = c._date;
 
           let placed = false;
           for (const r of orderedRoomsForClass(cls)) {
             if (Number(r.capacity) < size) continue;
-            if (!isFree(Number(r.id), c._key, c._s, c._e)) continue;
+            if (!isFree(Number(r.id), date, c._s, c._e)) continue;
 
-            occupy(Number(r.id), c._key, c._s, c._e);
+            occupy(Number(r.id), date, c._s, c._e);
             await env.DB.prepare(
               "INSERT INTO assignments(course_instance_id, room_id) VALUES (?,?)"
             ).bind(c.id, r.id).run();
@@ -304,13 +339,11 @@ export default {
           }
 
           if (!placed) {
-            return bad(
-              `无可行解：第${c.week}周 周${c.weekday} ${c.start_time}-${c.end_time}（${cls.name} - ${c.title}）没有可用教室（容量/冲突）。`
-            );
+            return bad(`无可行解：${date} ${c.start_time}-${c.end_time}（${cls.name} - ${c.title}）没有可用教室（容量/冲突）。`);
           }
         }
 
-        return json({ ok: true, message: "课表生成完成（已强制：当天不换教室 + 班级优先教室）" });
+        return json({ ok: true, message: "排课完成（当天不换教室 + 班级优先教室）" });
       }
 
       return bad("接口不存在", 404);
