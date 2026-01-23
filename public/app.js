@@ -1,5 +1,8 @@
 const $ = (s) => document.querySelector(s);
-const msg = (t, ok=false) => { $("#msg").textContent = t || ""; $("#msg").className = ok ? "msg ok" : "msg"; };
+const msg = (t, ok=false) => {
+  $("#msg").textContent = t || "";
+  $("#msg").className = ok ? "msg ok" : "msg";
+};
 
 async function jget(url){ const r = await fetch(url); return r.json(); }
 async function jpost(url, body){
@@ -11,9 +14,35 @@ async function jdel(url){
   return r.json();
 }
 
-let state = { rooms:[], classes:[], pickedDates:[], cal: new Date() };
+/** ===== 缓存状态 ===== */
+let state = {
+  rooms: null,      // [{...}]
+  classes: null,    // [{...}]
+  courses: null,    // [{...}]
+  pickedDates: [],
+  cal: new Date(),
+  currentTab: "rooms",
+};
+
+/** ===== 缓存加载（提速核心）===== */
+async function ensureRooms(force=false){
+  if (!force && Array.isArray(state.rooms)) return state.rooms;
+  state.rooms = await jget("/api/rooms");
+  return state.rooms;
+}
+async function ensureClasses(force=false){
+  if (!force && Array.isArray(state.classes)) return state.classes;
+  state.classes = await jget("/api/classes");
+  return state.classes;
+}
+async function ensureCourses(force=false){
+  if (!force && Array.isArray(state.courses)) return state.courses;
+  state.courses = await jget("/api/courses");
+  return state.courses;
+}
 
 window.tab = async (t)=>{
+  state.currentTab = t;
   msg("");
   if(t==="rooms") return renderRooms();
   if(t==="classes") return renderClasses();
@@ -28,18 +57,17 @@ window.solve = async ()=>{
 };
 
 function pad(n){ return String(n).padStart(2,"0"); }
-function fmtDate(d){
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
-}
+function fmtDate(d){ return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`; }
 
-function calRender(){
+/** ===== 日历渲染（不触发接口请求）===== */
+function calendarHTML(){
   const d = state.cal;
   const y = d.getFullYear(), m = d.getMonth();
   const first = new Date(y,m,1);
   const startDow = first.getDay(); // 0 Sun
   const daysInMonth = new Date(y,m+1,0).getDate();
-
   const dow = ["日","一","二","三","四","五","六"];
+
   let html = `
   <div class="cal">
     <div class="calhead">
@@ -47,22 +75,23 @@ function calRender(){
       <div style="font-weight:800">${y}年 ${m+1}月</div>
       <button onclick="calMove(1)">下月 →</button>
     </div>
+
     <div class="calgrid" style="margin-top:10px">
       ${dow.map(x=>`<div class="dow">周${x}</div>`).join("")}
     </div>
+
     <div class="calgrid">
   `;
 
-  // 前置空格
-  for(let i=0;i<startDow;i++){
-    html += `<div class="day off"> </div>`;
-  }
+  for(let i=0;i<startDow;i++) html += `<div class="day off"> </div>`;
+
   for(let day=1; day<=daysInMonth; day++){
     const dd = new Date(y,m,day);
     const key = fmtDate(dd);
     const on = state.pickedDates.includes(key);
     html += `<div class="day ${on?"on":""}" onclick="toggleDate('${key}')">${day}</div>`;
   }
+
   html += `</div>
     <div class="meta" style="margin-top:10px">
       已选日期：${state.pickedDates.length? state.pickedDates.join(", ") : "（未选择）"}
@@ -74,22 +103,41 @@ function calRender(){
   </div>`;
   return html;
 }
+
 window.calMove = (delta)=>{
   const d = state.cal;
   state.cal = new Date(d.getFullYear(), d.getMonth()+delta, 1);
-  renderCourses();
+  // 只更新课程页的日历区域
+  const calBox = $("#calBox");
+  if (calBox) calBox.innerHTML = calendarHTML();
 };
+
 window.toggleDate = (key)=>{
   const i = state.pickedDates.indexOf(key);
-  if(i>=0) state.pickedDates.splice(i,1); else state.pickedDates.push(key);
+  if(i>=0) state.pickedDates.splice(i,1);
+  else state.pickedDates.push(key);
   state.pickedDates.sort();
-  renderCourses();
+  const calBox = $("#calBox");
+  if (calBox) calBox.innerHTML = calendarHTML();
 };
-window.clearDates = ()=>{ state.pickedDates=[]; renderCourses(); };
-window.pickToday = ()=>{ const k=fmtDate(new Date()); if(!state.pickedDates.includes(k)) state.pickedDates=[k]; renderCourses(); };
 
+window.clearDates = ()=>{
+  state.pickedDates = [];
+  const calBox = $("#calBox");
+  if (calBox) calBox.innerHTML = calendarHTML();
+};
+
+window.pickToday = ()=>{
+  const k = fmtDate(new Date());
+  state.pickedDates = [k];
+  const calBox = $("#calBox");
+  if (calBox) calBox.innerHTML = calendarHTML();
+};
+
+/** ===== 页面：教室 ===== */
 async function renderRooms(){
-  state.rooms = await jget("/api/rooms");
+  const rooms = await ensureRooms(false);
+
   $("#app").innerHTML = `
     <div class="grid">
       <div>
@@ -104,16 +152,17 @@ async function renderRooms(){
         </div>
         <div class="meta" style="margin-top:10px">优先级越小越先分配；同优先级下容量更小者更优先（更省教室）。</div>
       </div>
+
       <div>
         <h3>已建教室</h3>
         <div class="list">
-          ${state.rooms.map(r=>`
+          ${rooms.map(r=>`
             <div class="item">
               <div>
                 <div style="font-weight:800">${r.name}</div>
                 <div class="meta">容量：${r.capacity}　优先级：${r.priority}　(ID:${r.id})</div>
               </div>
-              <button class="danger" onclick="delRoom(${r.id}, '${r.name.replace(/'/g,"")}')">删除</button>
+              <button class="danger" onclick="delRoom(${r.id}, '${String(r.name).replace(/'/g,"")}')">删除</button>
             </div>
           `).join("") || `<div class="meta">暂无教室</div>`}
         </div>
@@ -121,26 +170,35 @@ async function renderRooms(){
     </div>
   `;
 }
+
 window.addRoom = async ()=>{
   const name = $("#rname").value.trim();
   const capacity = Number($("#rcap").value);
   const priority = Number($("#rpri").value || 100);
+
   const r = await jpost("/api/rooms", { name, capacity, priority });
   if(r.ok===false) return msg("❌ "+r.message);
+
   msg("✅ 已新增教室", true);
-  renderRooms();
+  await ensureRooms(true);          // 刷新缓存
+  await ensureClasses(true);        // 班级页需要最新教室列表
+  if (state.currentTab === "rooms") renderRooms();
 };
+
 window.delRoom = async (id, name)=>{
   if(!confirm(`确定删除教室：${name}？（相关分配会一起清理）`)) return;
   const r = await jdel(`/api/rooms/${id}`);
   if(r.ok===false) return msg("❌ "+r.message);
+
   msg("✅ 已删除教室", true);
-  renderRooms();
+  await ensureRooms(true);
+  await ensureClasses(true);
+  if (state.currentTab === "rooms") renderRooms();
 };
 
+/** ===== 页面：班级 ===== */
 async function renderClasses(){
-  state.rooms = await jget("/api/rooms");
-  state.classes = await jget("/api/classes");
+  const [rooms, classes] = await Promise.all([ensureRooms(false), ensureClasses(false)]);
 
   $("#app").innerHTML = `
     <div class="grid">
@@ -159,8 +217,14 @@ async function renderClasses(){
         </div>
 
         <div style="margin-top:10px">
-          <div style="font-weight:800;margin-bottom:6px">班级优先教室（勾选顺序=优先顺序）</div>
-          <div id="prooms" style="display:grid;gap:6px;max-height:180px;overflow:auto;border:1px solid rgba(255,255,255,.10);border-radius:14px;padding:10px;background:rgba(255,255,255,.03)"></div>
+          <div style="font-weight:800;margin-bottom:6px">班级优先教室（页面顺序=优先顺序）</div>
+          <div id="prooms" style="display:grid;gap:6px;max-height:180px;overflow:auto;border:1px solid rgba(255,255,255,.10);border-radius:14px;padding:10px;background:rgba(255,255,255,.03)">
+            ${rooms.map(r=>`
+              <label style="display:flex;gap:8px;align-items:center">
+                <input type="checkbox" value="${r.id}"> ${r.name}（容量${r.capacity}，优先级${r.priority}）
+              </label>
+            `).join("") || `<div class="meta">请先新增教室</div>`}
+          </div>
           <div class="meta" style="margin-top:8px">规则：先尝试这些教室；不行才自动用其它教室。</div>
         </div>
 
@@ -172,7 +236,7 @@ async function renderClasses(){
       <div>
         <h3>已建班级</h3>
         <div class="list">
-          ${state.classes.map(c=>`
+          ${classes.map(c=>`
             <div class="item">
               <div>
                 <div style="font-weight:800">${c.name}</div>
@@ -187,14 +251,8 @@ async function renderClasses(){
       </div>
     </div>
   `;
-
-  const box = $("#prooms");
-  box.innerHTML = state.rooms.map(r=>`
-    <label style="display:flex;gap:8px;align-items:center">
-      <input type="checkbox" value="${r.id}"> ${r.name}（容量${r.capacity}，优先级${r.priority}）
-    </label>
-  `).join("") || `<div class="meta">请先新增教室</div>`;
 }
+
 window.addClass = async ()=>{
   const name = $("#cname").value.trim();
   const size = Number($("#csize").value);
@@ -205,28 +263,35 @@ window.addClass = async ()=>{
 
   const r = await jpost("/api/classes", { name, size, allow_switch, preferred_room_ids });
   if(r.ok===false) return msg("❌ "+r.message);
+
   msg("✅ 已新增班级", true);
-  renderClasses();
+  await ensureClasses(true);
+  if (state.currentTab === "classes") renderClasses();
 };
+
 window.delClass = async (id, name)=>{
   if(!confirm(`确定删除班级：${name}？（该班课程与分配会一起删除）`)) return;
   const r = await jdel(`/api/classes/${id}`);
   if(r.ok===false) return msg("❌ "+r.message);
+
   msg("✅ 已删除班级", true);
-  renderClasses();
+  await ensureClasses(true);
+  await ensureCourses(true); // 课程页列表需要更新
+  if (state.currentTab === "classes") renderClasses();
 };
 
+/** ===== 页面：课程（按日期）===== */
 async function renderCourses(){
-  state.classes = await jget("/api/classes");
-  const courses = await jget("/api/courses");
+  const [classes, courses] = await Promise.all([ensureClasses(false), ensureCourses(false)]);
 
   $("#app").innerHTML = `
     <div class="grid">
       <div>
         <h3>课程（按日历选日期）</h3>
+
         <div class="row">
           <select id="cid">
-            ${state.classes.map(c=>`<option value="${c.id}">${c.name}（${c.size}人）</option>`).join("")}
+            ${classes.map(c=>`<option value="${c.id}">${c.name}（${c.size}人）</option>`).join("")}
           </select>
           <input id="ctitle" placeholder="课程名（如 高数）" />
         </div>
@@ -236,13 +301,14 @@ async function renderCourses(){
           <input id="cend" placeholder="结束时间 HH:MM（如 10:05）" />
         </div>
 
-        ${calRender()}
+        <div id="calBox">${calendarHTML()}</div>
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
           <button class="primary" onclick="addCourseDates()">保存：这些日期都上这门课</button>
         </div>
+
         <div class="meta" style="margin-top:8px">
-          说明：一次可以点多个日期；每个日期会生成一条课程记录。然后点“一键生成”分配教室。
+          一次可点多个日期；每个日期会生成一条课程记录。然后点“一键生成”分配教室。
         </div>
       </div>
 
@@ -253,7 +319,7 @@ async function renderCourses(){
             <div class="item">
               <div>
                 <div style="font-weight:800">${ci.title}</div>
-                <div class="meta">${ci.class_name}　${ci.date}　${ci.start_time}-${ci.end_time}　(ID:${ci.id})</div>
+                <div class="meta">${ci.class_name || ""}　${ci.date}　${ci.start_time}-${ci.end_time}　(ID:${ci.id})</div>
               </div>
               <button class="danger" onclick="delCourse(${ci.id})">删除</button>
             </div>
@@ -263,6 +329,7 @@ async function renderCourses(){
     </div>
   `;
 }
+
 window.addCourseDates = async ()=>{
   const class_id = Number($("#cid").value);
   const title = $("#ctitle").value.trim();
@@ -272,28 +339,34 @@ window.addCourseDates = async ()=>{
 
   const r = await jpost("/api/course/add_dates", { class_id, title, dates, start_time, end_time });
   if(r.ok===false) return msg("❌ "+r.message);
+
   msg("✅ 已新增课程（按日期）", true);
-  // 清空日期选择
   state.pickedDates = [];
-  renderCourses();
+  await ensureCourses(true);
+  if (state.currentTab === "courses") renderCourses();
 };
+
 window.delCourse = async (id)=>{
   if(!confirm("确定删除这条课程？")) return;
   const r = await jdel(`/api/course/${id}`);
   if(r.ok===false) return msg("❌ "+r.message);
+
   msg("✅ 已删除课程", true);
-  renderCourses();
+  await ensureCourses(true);
+  if (state.currentTab === "courses") renderCourses();
 };
 
+/** ===== 页面：课表复制 ===== */
 async function renderTimetable(){
-  state.classes = await jget("/api/classes");
+  const classes = await ensureClasses(false);
 
   $("#app").innerHTML = `
     <div>
       <h3>课表复制（格式：日期 时间 + 教室）</h3>
+
       <div class="row" style="margin-top:10px">
         <select id="ttcid">
-          ${state.classes.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}
+          ${classes.map(c=>`<option value="${c.id}">${c.name}</option>`).join("")}
         </select>
         <div class="row" style="gap:10px">
           <input id="from" type="date" />
@@ -310,6 +383,7 @@ async function renderTimetable(){
     </div>
   `;
 }
+
 window.loadTT = async ()=>{
   const cid = Number($("#ttcid").value);
   const from = $("#from").value;
@@ -326,7 +400,7 @@ window.loadTT = async ()=>{
   txt += `\n`;
 
   let cur = "";
-  for(const i of t.items){
+  for(const i of (t.items || [])){
     if(i.date !== cur){
       cur = i.date;
       txt += `${cur}\n`;
@@ -334,9 +408,10 @@ window.loadTT = async ()=>{
     txt += `${i.start_time}-${i.end_time}  ${i.title}  教室：${i.room_name || "未分配"}\n`;
   }
 
-  $("#tt").textContent = txt.trim() || "（此范围内暂无课程）";
+  $("#tt").textContent = (txt.trim() && (t.items||[]).length) ? txt.trim() : "（此范围内暂无课程）";
   msg("✅ 已加载课表", true);
 };
+
 window.copyTT = async ()=>{
   const text = ($("#tt").textContent || "").trim();
   if(!text) return alert("先加载课表");
@@ -344,5 +419,11 @@ window.copyTT = async ()=>{
   alert("已复制，可直接发群");
 };
 
-// 默认页
-tab("rooms");
+/** ===== 首次进入 ===== */
+(async ()=>{
+  // 预热缓存：首次打开就把 rooms/classes 拉下来，之后切换会快很多
+  try{
+    await Promise.all([ensureRooms(false), ensureClasses(false)]);
+  }catch(e){}
+  tab("rooms");
+})();
