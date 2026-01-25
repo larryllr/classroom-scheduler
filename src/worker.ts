@@ -21,7 +21,11 @@ function bad(message: string, status = 400) {
 function toMin(t: string): number {
   const m = /^(\d{1,2}):(\d{2})$/.exec(t);
   if (!m) return NaN;
-  return Number(m[1]) * 60 + Number(m[2]);
+  const hours = Number(m[1]);
+  const minutes = Number(m[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return NaN;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return NaN;
+  return hours * 60 + minutes;
 }
 function overlap(a1: number, a2: number, b1: number, b2: number) {
   return a1 < b2 && b1 < a2;
