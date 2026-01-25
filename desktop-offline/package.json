@@ -1,40 +1,62 @@
 {
   "name": "kuankuan-classroom-scheduler-offline",
-  "version": "1.0.1",
-  "private": true,
+  "productName": "宽宽牌教室分配系统",
+  "version": "1.0.0",
+  "description": "离线版教室/教师/班级排课与自动分配（本地SQLite）",
   "main": "main.js",
+  "author": "Kuankuan",
+  "private": true,
+  "license": "UNLICENSED",
   "scripts": {
-    "postinstall": "electron-builder install-app-deps",
-    "pack": "electron-builder --win --x64"
-  },
-  "build": {
-    "appId": "com.kuankuan.classroom.scheduler",
-    "productName": "宽宽牌教室分配系统（离线版）",
-    "npmRebuild": true,
-    "directories": { "output": "dist" },
-    "files": [
-      "main.js",
-      "server.js",
-      "db.js",
-      "public/**"
-    ],
-    "win": {
-      "target": [
-        { "target": "nsis", "arch": ["x64"] }
-      ]
-    },
-    "nsis": {
-      "oneClick": true,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": false
-    }
+    "start": "electron .",
+    "dev": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
   },
   "dependencies": {
     "better-sqlite3": "^11.7.0",
     "express": "^4.19.2"
   },
   "devDependencies": {
-    "electron": "^28.3.0",
+    "electron": "^30.0.9",
     "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.kuankuan.classroom.scheduler",
+    "productName": "宽宽牌教室分配系统",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**",
+      "**/node_modules/bindings/**",
+      "**/node_modules/file-uri-to-path/**",
+      "**/*.node"
+    ],
+    "extraMetadata": {
+      "main": "main.js"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "宽宽牌教室分配系统"
+    }
   }
 }
