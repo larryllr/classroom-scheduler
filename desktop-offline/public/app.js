@@ -1,7 +1,7 @@
 /* 宽宽牌教室分配系统（离线版）
    - 启动自检：/api/ping + /api/meta
    - fetch 超时 + 可视化报错（不再“加载中”无限转）
-   - 深色现代UI，修复白底白字
+   - 深色现代UI（配合 style.css），修复白底白字
 */
 
 const $ = (sel) => document.querySelector(sel);
@@ -42,7 +42,6 @@ async function apiFetch(url, opts = {}) {
     try {
       json = text ? JSON.parse(text) : null;
     } catch {
-      // 非JSON也可能是404文本
       json = null;
     }
 
@@ -58,20 +57,28 @@ async function apiFetch(url, opts = {}) {
   }
 }
 
+/* ✅ 修复点：#status 不存在时不崩溃（启动页阶段就是不存在） */
 function setStatus(kind, msg) {
   const box = $("#status");
+  if (!box) {
+    try {
+      console.warn("[STATUS]", kind, msg);
+    } catch {}
+    return;
+  }
   box.className = `status ${kind}`;
   box.textContent = msg;
   box.style.display = "block";
 }
-
 function clearStatus() {
   const box = $("#status");
+  if (!box) return;
   box.style.display = "none";
 }
 
 function toast(msg) {
   const t = $("#toast");
+  if (!t) return;
   t.textContent = msg;
   t.classList.add("show");
   setTimeout(() => t.classList.remove("show"), 1800);
@@ -111,7 +118,6 @@ function render() {
     </main>
 
     <footer class="footer">
-      <div class="hint">小提示：如果一直“加载中”，去看 <b>last.log</b> 里是否有 <code>/api/*</code> 请求报错。</div>
       <div class="hint">时间段：08:00–23:00，90分钟/节，无间隔；排课结果可按“教室课表/教师课表”分别生成。</div>
     </footer>
 
@@ -233,11 +239,10 @@ function renderClasses() {
         <label>班级可上时间段（点亮为可上）</label>
         <div class="chips" id="classAvail">${maskBadges(state.meta?.full_mask ?? 1023)}</div>
 
-        <label>最少连续节数（任务必须 ≥ 该值）<input id="classMinCont" type="number" min="1" max="10" value="1"/></label>
+        <label>最少连续节数<input id="classMinCont" type="number" min="1" max="10" value="1"/></label>
 
         <button class="btn primary" id="btnAddClass">添加班级</button>
       </div>
-      <div class="muted small">提示：后续“排课任务”里会按班级/教师的可上时间段与连续节数约束排课。</div>
     </div>
 
     <div class="card">
@@ -248,7 +253,6 @@ function renderClasses() {
           <tbody>${rows || `<tr><td colspan="5" class="muted">暂无班级</td></tr>`}</tbody>
         </table>
       </div>
-      <div class="muted small">编辑功能会在弹窗里完成（为了让不会的人更简单）。</div>
     </div>
   </section>`;
 }
@@ -277,7 +281,7 @@ function renderTeachers() {
         <label>教师姓名<input id="teacherName" placeholder="如：张老师" /></label>
         <label>教师可上时间段（点亮为可上）</label>
         <div class="chips" id="teacherAvail">${maskBadges(state.meta?.full_mask ?? 1023)}</div>
-        <label>最少连续节数（任务必须 ≥ 该值）<input id="teacherMinCont" type="number" min="1" max="10" value="1"/></label>
+        <label>最少连续节数<input id="teacherMinCont" type="number" min="1" max="10" value="1"/></label>
         <button class="btn primary" id="btnAddTeacher">添加教师</button>
       </div>
     </div>
@@ -323,7 +327,7 @@ function renderTasks() {
         <label>教师<select id="taskTeacher">${teacherOpt}</select></label>
         <label>课程名称<input id="taskCourse" placeholder="如：数学" /></label>
 
-        <label>连续节数（90分钟/节，必须相邻）<input id="taskPeriods" type="number" min="1" max="10" value="1"/></label>
+        <label>连续节数（必须相邻）<input id="taskPeriods" type="number" min="1" max="10" value="1"/></label>
 
         <label>任务优先教室（可选，多选按顺序）</label>
         <select id="taskPreferRooms" multiple size="6">${roomOpt}</select>
@@ -351,9 +355,6 @@ function renderTasks() {
           <thead><tr><th>日期</th><th>班级</th><th>课程</th><th>教师</th><th>连续节</th><th class="right">操作</th></tr></thead>
           <tbody>${rows || `<tr><td colspan="6" class="muted">暂无任务</td></tr>`}</tbody>
         </table>
-      </div>
-      <div class="muted small">
-        说明：排课时间段为 08:00–23:00，90分钟/节；班级/教师可限制可上时间段；连续节必须相邻；教室/教师/班级同一时间段不能冲突；班级勾选“同日不换教室”会强制当天固定教室。
       </div>
     </div>
   </section>`;
@@ -429,11 +430,9 @@ function bindTab() {
       state.activeTab = b.dataset.tab;
       clearStatus();
       render();
-      // schedule tab needs no preload
     });
   });
 
-  // per-tab binds
   if (state.activeTab === "rooms") bindRooms();
   if (state.activeTab === "classes") bindClasses();
   if (state.activeTab === "teachers") bindTeachers();
@@ -475,12 +474,13 @@ function bindRooms() {
   });
 }
 
-/* Chips helpers: build mask from clicked chips */
-function bindChips(containerId, initialMask = FULL_MASK) {
+/* Chips helper */
+function bindChips(containerId, initialMask) {
   const el = $(containerId);
-  if (!el) return { getMask: () => initialMask, setMask: () => {} };
+  if (!el) return { getMask: () => initialMask ?? 1023, setMask: () => {} };
 
-  let mask = initialMask;
+  let mask = initialMask ?? 1023;
+
   const sync = () => {
     $$("#" + el.id + " .chip").forEach((c) => {
       const i = Number(c.dataset.slot);
@@ -494,19 +494,12 @@ function bindChips(containerId, initialMask = FULL_MASK) {
     if (!chip) return;
     const i = Number(chip.dataset.slot);
     mask ^= 1 << i;
-    // 不允许全关（至少开一个）
     if (mask === 0) mask = 1 << i;
     sync();
   });
 
   sync();
-  return {
-    getMask: () => mask,
-    setMask: (m) => {
-      mask = m;
-      sync();
-    },
-  };
+  return { getMask: () => mask, setMask: (m) => ((mask = m), sync()) };
 }
 
 /* Classes binds */
@@ -517,21 +510,14 @@ function bindClasses() {
     try {
       const name = $("#className").value.trim();
       const size = Number($("#classSize").value);
-      const allow_switch = !$("#classFixed").checked; // 选中=同日不换 => allow_switch=0
+      const allow_switch = !$("#classFixed").checked;
       const pref = Array.from($("#classPrefRooms").selectedOptions).map((o) => o.value).join(",");
       const avail_mask = classAvail.getMask();
       const min_continuous = Number($("#classMinCont").value || 1);
 
       await apiFetch("/api/classes", {
         method: "POST",
-        body: JSON.stringify({
-          name,
-          size,
-          allow_switch,
-          preferred_room_ids: pref,
-          avail_mask,
-          min_continuous,
-        }),
+        body: JSON.stringify({ name, size, allow_switch, preferred_room_ids: pref, avail_mask, min_continuous }),
       });
       toast("班级已添加");
       await loadClasses();
@@ -573,11 +559,8 @@ function openEditClass(id) {
     <div class="form">
       <label>班级名称<input id="mClassName" value="${esc(c.name)}"/></label>
       <label>人数<input id="mClassSize" type="number" min="1" value="${c.size}"/></label>
-
       <label class="row"><span>同一天不换教室</span><input id="mClassFixed" type="checkbox" ${c.allow_switch ? "" : "checked"} /></label>
-
       <label>最少连续节数<input id="mClassMin" type="number" min="1" max="10" value="${c.min_continuous || 1}"/></label>
-
       <div class="rowBtns">
         <button class="btn primary" id="mSave">保存</button>
         <button class="btn ghost" id="mClose">取消</button>
@@ -723,6 +706,7 @@ function bindTasks() {
       await apiFetch("/api/tasks/add-dates", {
         method: "POST",
         body: JSON.stringify({ class_id, teacher_id, course_name, periods, dates, prefer_room_ids }),
+        timeout: 12000,
       });
 
       toast("任务已添加");
@@ -738,7 +722,7 @@ function bindTasks() {
     try {
       clearStatus();
       toast("开始排课…");
-      const r = await apiFetch("/api/solve", { method: "POST", body: JSON.stringify({}) , timeout: 20000});
+      const r = await apiFetch("/api/solve", { method: "POST", body: JSON.stringify({}), timeout: 20000 });
       toast(r.message || "排课完成");
     } catch (e) {
       setStatus("err", "排课失败：" + fmtErr(e));
@@ -776,7 +760,7 @@ function bindSchedule() {
       const qs = new URLSearchParams();
       if (date) qs.set("date", date);
       if (room_id) qs.set("room_id", room_id);
-      const r = await apiFetch(`/api/schedule/rooms?${qs.toString()}`);
+      const r = await apiFetch(`/api/schedule/rooms?${qs.toString()}`, { timeout: 12000 });
       lastScheduleText = formatSchedule(r.items, "room");
       $("#schedOut").textContent = lastScheduleText;
       toast("已生成教室课表");
@@ -793,7 +777,7 @@ function bindSchedule() {
       const qs = new URLSearchParams();
       if (date) qs.set("date", date);
       if (teacher_id) qs.set("teacher_id", teacher_id);
-      const r = await apiFetch(`/api/schedule/teachers?${qs.toString()}`);
+      const r = await apiFetch(`/api/schedule/teachers?${qs.toString()}`, { timeout: 12000 });
       lastScheduleText = formatSchedule(r.items, "teacher");
       $("#schedOut").textContent = lastScheduleText;
       toast("已生成教师课表");
@@ -804,14 +788,10 @@ function bindSchedule() {
 
   $("#btnCopySched")?.addEventListener("click", async () => {
     try {
-      if (!lastScheduleText) {
-        toast("先生成课表再复制");
-        return;
-      }
+      if (!lastScheduleText) return toast("先生成课表再复制");
       await navigator.clipboard.writeText(lastScheduleText);
       toast("已复制，可直接发群");
     } catch {
-      // fallback
       const ta = document.createElement("textarea");
       ta.value = lastScheduleText;
       document.body.appendChild(ta);
@@ -830,10 +810,10 @@ function buildCalendar(containerSel) {
 
   const now = new Date();
   const y = now.getFullYear();
-  const m = now.getMonth(); // 0-based
+  const m = now.getMonth();
 
   const first = new Date(y, m, 1);
-  const startDay = first.getDay(); // 0 Sun
+  const startDay = first.getDay();
   const daysInMonth = new Date(y, m + 1, 0).getDate();
 
   const cells = [];
@@ -861,15 +841,8 @@ function buildCalendar(containerSel) {
   });
 }
 
-/* --------- Formatting --------- */
-function slotText(i) {
-  const s = state.meta?.slots?.[i];
-  if (!s) return "";
-  return `${s.start}-${s.end}`;
-}
-
+/* --------- Schedule format --------- */
 function formatSchedule(items, mode) {
-  // mode room/teacher: 都输出 “时间 + 教室” 重点，再带班级/老师/课程
   const byKey = new Map();
   for (const it of items || []) {
     const key = mode === "room" ? (it.room_name || "未知教室") : (it.teacher_name || "未知教师");
@@ -886,7 +859,6 @@ function formatSchedule(items, mode) {
       return a.time_index - b.time_index;
     });
 
-    // 合并连续时间段（同一天同一任务同一教室/教师）
     let i = 0;
     while (i < arr.length) {
       const cur = arr[i];
@@ -899,24 +871,13 @@ function formatSchedule(items, mode) {
         arr[j + 1].teacher_id === cur.teacher_id &&
         arr[j + 1].class_id === cur.class_id &&
         arr[j + 1].time_index === arr[j].time_index + 1
-      ) {
-        j++;
-      }
+      ) j++;
 
-      const startSlot = arr[i].time_index;
-      const endSlot = arr[j].time_index;
-
-      const start = state.meta?.slots?.[startSlot]?.start || "";
-      const end = state.meta?.slots?.[endSlot]?.end || "";
-
+      const start = state.meta?.slots?.[arr[i].time_index]?.start || "";
+      const end = state.meta?.slots?.[arr[j].time_index]?.end || "";
       const time = `${cur.date} ${start}-${end}`;
-      const place = `教室：${cur.room_name || "?"}`;
-      const cls = `班级：${cur.class_name || "?"}`;
-      const te = `教师：${cur.teacher_name || "?"}`;
-      const course = `课程：${cur.course_name || "?"}`;
-
-      lines.push(`${time}  ${place}`);
-      lines.push(`  ${cls}  ${te}  ${course}`);
+      lines.push(`${time}  教室：${cur.room_name || "?"}`);
+      lines.push(`  班级：${cur.class_name || "?"}  教师：${cur.teacher_name || "?"}  课程：${cur.course_name || "?"}`);
       i = j + 1;
     }
     lines.push("");
@@ -925,22 +886,14 @@ function formatSchedule(items, mode) {
 }
 
 /* ---------------- Loaders ---------------- */
-async function loadRooms() {
-  state.rooms = await apiFetch("/api/rooms");
-}
-async function loadClasses() {
-  state.classes = await apiFetch("/api/classes");
-}
-async function loadTeachers() {
-  state.teachers = await apiFetch("/api/teachers");
-}
+async function loadRooms() { state.rooms = await apiFetch("/api/rooms"); }
+async function loadClasses() { state.classes = await apiFetch("/api/classes"); }
+async function loadTeachers() { state.teachers = await apiFetch("/api/teachers"); }
 async function loadTasks() {
   const r = await apiFetch("/api/tasks");
   state.tasks = r.items || [];
 }
-async function loadMeta() {
-  state.meta = await apiFetch("/api/meta");
-}
+async function loadMeta() { state.meta = await apiFetch("/api/meta"); }
 async function loadAll() {
   await loadMeta();
   await Promise.all([loadRooms(), loadClasses(), loadTeachers(), loadTasks()]);
@@ -957,20 +910,16 @@ function esc(s) {
 }
 
 async function boot() {
-  // 页面骨架（避免黑屏）
   document.body.innerHTML = `
   <div class="boot">
     <div class="spinner"></div>
     <div class="bootText">加载中…</div>
-    <div class="bootSub">如果超过10秒，请查看 last.log 或把报错复制给我。</div>
+    <div class="bootSub">如果超过10秒，请把启动失败原因发我。</div>
   </div>`;
 
   try {
-    // 先 ping，确认 API 活着
     await apiFetch("/api/ping", { timeout: 2500 });
-
     await loadAll();
-    clearStatus();
     document.body.innerHTML = `<div id="app"></div>`;
     render();
   } catch (e) {
@@ -979,8 +928,7 @@ async function boot() {
     <div class="boot err">
       <div class="bootText">启动失败</div>
       <div class="bootSub">原因：${esc(msg)}</div>
-      <div class="bootSub">请把 <b>last.log</b> 最后 30 行发给我，我能直接定位。</div>
-      <div class="bootSub">你也可以在浏览器地址栏打开：<code>/api/ping</code>、<code>/api/meta</code> 测试。</div>
+      <div class="bootSub">你可以在地址栏打开：<code>/api/ping</code>、<code>/api/meta</code> 测试。</div>
     </div>`;
   }
 }
