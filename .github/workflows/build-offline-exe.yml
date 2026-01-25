@@ -1,4 +1,4 @@
-name: Build Offline EXE (Kuankuan)
+name: Build Offline Windows EXE
 
 on:
   workflow_dispatch:
@@ -9,6 +9,7 @@ jobs:
     defaults:
       run:
         working-directory: desktop-offline
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -18,14 +19,14 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install
+      - name: Install dependencies
         run: npm install
 
-      - name: Build EXE
-        run: npm run pack
+      - name: Build Windows installer (NSIS)
+        run: npm run dist
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Kuankuan-Classroom-Offline-EXE
-          path: desktop-offline/dist/*.exe
+          name: kuankuan-classroom-scheduler-offline-win
+          path: desktop-offline/dist/**
