@@ -48,27 +48,23 @@ function initDb(electronApp) {
       size INTEGER NOT NULL,
       allow_switch INTEGER NOT NULL DEFAULT 1,            -- 1可换教室 0同日固定教室
       preferred_room_ids TEXT,                            -- "1,2,3"
-      avail_mask INTEGER NOT NULL DEFAULT ${FULL_MASK},    -- 可上时间段mask
-      min_continuous INTEGER NOT NULL DEFAULT 1            -- 最少连续节数（对每个任务要求）
+      avail_mask INTEGER NOT NULL DEFAULT ${FULL_MASK}     -- 可上时间段mask
     );
 
     CREATE TABLE IF NOT EXISTS teachers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       subject TEXT,
-      avail_mask INTEGER NOT NULL DEFAULT ${FULL_MASK},
-      min_continuous INTEGER NOT NULL DEFAULT 1
+      avail_mask INTEGER NOT NULL DEFAULT ${FULL_MASK}
     );
 
-    -- 排课任务：某班某日上一门课，由某老师上，连续若干节（90分钟/节）
+    -- 排课任务：某班某日由老师在指定时间段授课（90分钟/节）
     CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       class_id INTEGER NOT NULL,
       teacher_id INTEGER NOT NULL,
       date TEXT NOT NULL,
       time_index INTEGER,
-      course_name TEXT NOT NULL,
-      periods INTEGER NOT NULL DEFAULT 1,
       prefer_room_ids TEXT
     );
 
@@ -205,14 +201,13 @@ const api = {
     const allow_switch = req.body?.allow_switch ? 1 : 0;
     const preferred_room_ids = cleanCsvIds(req.body?.preferred_room_ids);
     const avail_mask = toInt(req.body?.avail_mask, FULL_MASK);
-    const min_continuous = 1;
     if (!name) return bad(res, "请填写班级名称");
     if (!Number.isFinite(size) || size <= 0) return bad(res, "人数必须是正数");
     if (avail_mask < 0 || avail_mask > FULL_MASK) return bad(res, "班级可上时间段设置错误");
     if (!isPrefixMask(avail_mask)) return bad(res, "班级可上时间段需从第一节开始连续勾选");
     db.prepare(
-      "INSERT INTO classes(name,size,allow_switch,preferred_room_ids,avail_mask,min_continuous) VALUES (?,?,?,?,?,?)"
-    ).run(name, size, allow_switch, preferred_room_ids, avail_mask, min_continuous);
+      "INSERT INTO classes(name,size,allow_switch,preferred_room_ids,avail_mask) VALUES (?,?,?,?,?)"
+    ).run(name, size, allow_switch, preferred_room_ids, avail_mask);
     reply(res, { ok: true });
   },
   updateClass(db, req, res) {
@@ -223,15 +218,14 @@ const api = {
     const allow_switch = req.body?.allow_switch ? 1 : 0;
     const preferred_room_ids = cleanCsvIds(req.body?.preferred_room_ids);
     const avail_mask = toInt(req.body?.avail_mask, FULL_MASK);
-    const min_continuous = 1;
     if (!name) return bad(res, "请填写班级名称");
     if (!Number.isFinite(size) || size <= 0) return bad(res, "人数必须是正数");
     if (avail_mask < 0 || avail_mask > FULL_MASK) return bad(res, "班级可上时间段设置错误");
     if (!isPrefixMask(avail_mask)) return bad(res, "班级可上时间段需从第一节开始连续勾选");
 
     db.prepare(
-      "UPDATE classes SET name=?, size=?, allow_switch=?, preferred_room_ids=?, avail_mask=?, min_continuous=? WHERE id=?"
-    ).run(name, size, allow_switch, preferred_room_ids, avail_mask, min_continuous, id);
+      "UPDATE classes SET name=?, size=?, allow_switch=?, preferred_room_ids=?, avail_mask=? WHERE id=?"
+    ).run(name, size, allow_switch, preferred_room_ids, avail_mask, id);
 
     reply(res, { ok: true });
   },
@@ -259,12 +253,7 @@ const api = {
     if (!name) return bad(res, "请填写教师姓名");
     if (avail_mask < 0 || avail_mask > FULL_MASK) return bad(res, "教师可上时间段设置错误");
     if (!isPrefixMask(avail_mask)) return bad(res, "教师可上时间段需从第一节开始连续勾选");
-    db.prepare("INSERT INTO teachers(name,subject,avail_mask,min_continuous) VALUES (?,?,?,?)").run(
-      name,
-      subject,
-      avail_mask,
-      1
-    );
+    db.prepare("INSERT INTO teachers(name,subject,avail_mask) VALUES (?,?,?)").run(name, subject, avail_mask);
     reply(res, { ok: true });
   },
   updateTeacher(db, req, res) {
@@ -276,11 +265,10 @@ const api = {
     if (!name) return bad(res, "请填写教师姓名");
     if (avail_mask < 0 || avail_mask > FULL_MASK) return bad(res, "教师可上时间段设置错误");
     if (!isPrefixMask(avail_mask)) return bad(res, "教师可上时间段需从第一节开始连续勾选");
-    db.prepare("UPDATE teachers SET name=?, subject=?, avail_mask=?, min_continuous=? WHERE id=?").run(
+    db.prepare("UPDATE teachers SET name=?, subject=?, avail_mask=? WHERE id=?").run(
       name,
       subject,
       avail_mask,
-      1,
       id
     );
     reply(res, { ok: true });
@@ -320,7 +308,7 @@ const api = {
           t.*,
           c.name AS class_name,
           te.name AS teacher_name,
-          COALESCE(t.course_name, te.subject, "") AS course_name
+          COALESCE(te.subject, "") AS course_name
         FROM tasks t
         LEFT JOIN classes c ON c.id=t.class_id
         LEFT JOIN teachers te ON te.id=t.teacher_id
@@ -358,7 +346,7 @@ const api = {
 
     const uniq = Array.from(new Set(dates)).sort();
     const ins = db.prepare(
-      "INSERT INTO tasks(class_id,teacher_id,date,time_index,course_name,periods,prefer_room_ids) VALUES (?,?,?,?,?,?,?)"
+      "INSERT INTO tasks(class_id,teacher_id,date,time_index,prefer_room_ids) VALUES (?,?,?,?,?)"
     );
 
     const tx = db.transaction(() => {
@@ -367,7 +355,6 @@ const api = {
           const te = db.prepare("SELECT * FROM teachers WHERE id=?").get(teacher_id);
           if (!te) throw new Error("教师不存在");
           const teacherAvail = toInt(te.avail_mask, FULL_MASK);
-          const course_name = String(te.subject || te.name || "").trim();
           for (const idx of time_indexes) {
             if ((classAvail & (1 << idx)) === 0) {
               throw new Error(`班级「${cls.name}」不可上 ${SLOTS[idx]?.start}-${SLOTS[idx]?.end}`);
@@ -375,7 +362,7 @@ const api = {
             if ((teacherAvail & (1 << idx)) === 0) {
               throw new Error(`教师「${te.name}」不可上 ${SLOTS[idx]?.start}-${SLOTS[idx]?.end}`);
             }
-            ins.run(class_id, teacher_id, d, idx, course_name, 1, prefer_room_ids);
+            ins.run(class_id, teacher_id, d, idx, prefer_room_ids);
           }
         }
       }
@@ -570,12 +557,11 @@ const api = {
           s.date, s.time_index, s.room_id, r.name AS room_name,
           s.class_id, c.name AS class_name,
           s.teacher_id, te.name AS teacher_name,
-          s.task_id, t.course_name
+          s.task_id, COALESCE(te.subject, "") AS course_name
         FROM schedule_slots s
         LEFT JOIN rooms r ON r.id=s.room_id
         LEFT JOIN classes c ON c.id=s.class_id
         LEFT JOIN teachers te ON te.id=s.teacher_id
-        LEFT JOIN tasks t ON t.id=s.task_id
         ${where}
         ORDER BY r.name ASC, s.date ASC, s.time_index ASC, c.name ASC
       `
@@ -610,12 +596,11 @@ const api = {
           s.date, s.time_index, s.room_id, r.name AS room_name,
           s.class_id, c.name AS class_name,
           s.teacher_id, te.name AS teacher_name,
-          s.task_id, t.course_name
+          s.task_id, COALESCE(te.subject, "") AS course_name
         FROM schedule_slots s
         LEFT JOIN rooms r ON r.id=s.room_id
         LEFT JOIN classes c ON c.id=s.class_id
         LEFT JOIN teachers te ON te.id=s.teacher_id
-        LEFT JOIN tasks t ON t.id=s.task_id
         ${where}
         ORDER BY te.name ASC, s.date ASC, s.time_index ASC, c.name ASC
       `
@@ -655,35 +640,31 @@ const api = {
       }
       for (const c of d.classes || []) {
         db.prepare(
-          "INSERT INTO classes(id,name,size,allow_switch,preferred_room_ids,avail_mask,min_continuous) VALUES (?,?,?,?,?,?,?)"
+          "INSERT INTO classes(id,name,size,allow_switch,preferred_room_ids,avail_mask) VALUES (?,?,?,?,?,?)"
         ).run(
           c.id,
           c.name,
           c.size,
           c.allow_switch,
           c.preferred_room_ids,
-          c.avail_mask ?? FULL_MASK,
-          c.min_continuous ?? 1
+          c.avail_mask ?? FULL_MASK
         );
       }
       for (const t of d.teachers || []) {
-        db.prepare("INSERT INTO teachers(id,name,subject,avail_mask,min_continuous) VALUES (?,?,?,?,?)").run(
+        db.prepare("INSERT INTO teachers(id,name,subject,avail_mask) VALUES (?,?,?,?)").run(
           t.id,
           t.name,
           t.subject ?? "",
-          t.avail_mask ?? FULL_MASK,
-          t.min_continuous ?? 1
+          t.avail_mask ?? FULL_MASK
         );
       }
       for (const t of d.tasks || []) {
-        db.prepare("INSERT INTO tasks(id,class_id,teacher_id,date,time_index,course_name,periods,prefer_room_ids) VALUES (?,?,?,?,?,?,?,?)").run(
+        db.prepare("INSERT INTO tasks(id,class_id,teacher_id,date,time_index,prefer_room_ids) VALUES (?,?,?,?,?,?)").run(
           t.id,
           t.class_id,
           t.teacher_id,
           t.date,
           t.time_index ?? null,
-          t.course_name,
-          t.periods ?? 1,
           t.prefer_room_ids
         );
       }
