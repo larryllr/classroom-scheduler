@@ -75,6 +75,11 @@ function toast(msg) {
   setMsg(msg, "ok");
 }
 
+window.tab = (name) => {
+  state.activeTab = name;
+  render();
+};
+
 window.solveSchedule = async () => {
   try {
     clearStatus();
@@ -125,7 +130,7 @@ function render() {
   if (state.activeTab === "classes") bindClasses();
   if (state.activeTab === "teachers") bindTeachers();
   if (state.activeTab === "tasks") bindTasks();
-  if (state.activeTab === "schedule") bindSchedule();
+  if (state.activeTab === "schedules") bindSchedule();
 }
 
 function renderTab() {
@@ -138,7 +143,7 @@ function renderTab() {
       return renderTeachers();
     case "tasks":
       return renderTasks();
-    case "schedule":
+    case "schedules":
       return renderSchedule();
     default:
       return `<div class="card">未知页面</div>`;
@@ -791,7 +796,23 @@ function bindSchedule() {
         i.course_name || "",
       ]),
     ];
-    const html = `\n      <html><head><meta charset=\"utf-8\"/></head><body>\n      <table border=\"1\">\n        ${rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join(\"\")}</tr>`).join(\"\")}\n      </table>\n      </body></html>\n    `;\n    const blob = new Blob([html], { type: \"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\" });\n    const a = document.createElement(\"a\");\n    a.href = URL.createObjectURL(blob);\n    a.download = `课表_${new Date().toISOString().slice(0, 10)}.xlsx`;\n    a.click();\n    toast(\"已导出xlsx\");\n  });
+    const html = `
+      <html>
+        <head><meta charset="utf-8"/></head>
+        <body>
+          <table border="1">
+            ${rows.map((r) => `<tr>${r.map((c) => `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}
+          </table>
+        </body>
+      </html>
+    `;
+    const blob = new Blob([html], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `课表_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    a.click();
+    toast("已导出xlsx");
+  });
 }
 
 /* --------- Calendar --------- */

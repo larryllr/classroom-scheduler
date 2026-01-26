@@ -47,6 +47,15 @@ body{
 .tab:active{background:var(--red);border-color:rgba(229,62,62,.45)}
 .tab:focus,
 .tab:focus-visible{background:var(--red);border-color:rgba(229,62,62,.45);outline:none}
+.tabs button{
+  border:1px solid rgba(15,59,130,.35);background:var(--blue);color:#fff;
+  padding:10px 14px;border-radius:14px;cursor:pointer;font-weight:900;
+  box-shadow:0 6px 16px rgba(15,23,42,.12);
+}
+.tabs button:active{background:var(--red);border-color:rgba(229,62,62,.45)}
+.tabs button:focus,
+.tabs button:focus-visible{background:var(--red);border-color:rgba(229,62,62,.45);outline:none}
+.tabs button.primary{background:var(--blue)}
 .status{
   margin-top:14px;padding:12px 14px;border-radius:16px;border:1px solid var(--bd);
   background:var(--card);color:var(--muted);box-shadow:0 10px 26px rgba(15,23,42,.08)
