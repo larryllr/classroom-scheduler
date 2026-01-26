@@ -119,6 +119,27 @@ window.importData = async (file) => {
   }
 };
 
+function bindCommon() {
+  const exportBtn = $("#btnExport");
+  if (exportBtn && !exportBtn.dataset.bound) {
+    exportBtn.addEventListener("click", () => {
+      exportData();
+    });
+    exportBtn.dataset.bound = "1";
+  }
+
+  const fileInput = $("#fileImport");
+  if (fileInput && !fileInput.dataset.bound) {
+    fileInput.addEventListener("change", async (ev) => {
+      const file = ev.target.files?.[0];
+      if (!file) return;
+      await importData(file);
+      ev.target.value = "";
+    });
+    fileInput.dataset.bound = "1";
+  }
+}
+
 function render() {
   const app = $("#app");
   if (!state.meta) {
@@ -167,7 +188,7 @@ function renderRooms() {
     .join("");
 
   return `
-  <section class="grid2">
+  <section class="grid">
     <div class="card">
       <div class="cardTitle">新建教室</div>
       <div class="form">
@@ -221,7 +242,7 @@ function renderClasses() {
     .join("");
 
   return `
-  <section class="grid2">
+  <section class="grid">
     <div class="card">
       <div class="cardTitle">新建班级</div>
       <div class="form">
@@ -274,7 +295,7 @@ function renderTeachers() {
     .join("");
 
   return `
-  <section class="grid2">
+  <section class="grid">
     <div class="card">
       <div class="cardTitle">新建教师</div>
       <div class="form">
@@ -321,7 +342,7 @@ function renderTasks() {
     .join("");
 
   return `
-  <section class="grid2">
+  <section class="grid">
     <div class="card">
       <div class="cardTitle">添加排课任务（用日历批量选日期）</div>
       <div class="form">
@@ -955,6 +976,7 @@ function esc(s) {
 async function boot() {
   const app = $("#app");
   setMsg("加载中…");
+  bindCommon();
   try {
     // 先 ping，确认 API 活着
     await apiFetch("/api/ping", { timeout: 2500 });
