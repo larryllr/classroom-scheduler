@@ -3,6 +3,21 @@
    - fetch 超时 + 可视化报错（不再“加载中”无限转）
    - 深色现代UI，修复白底白字
 */
+// ===== 强制修复：日历必须是网格（月历），并且 picked 要变色 =====
+(function injectCalendarCssFix(){
+  const css = `
+  .calendar{display:grid !important;grid-template-columns:repeat(7,minmax(0,1fr)) !important;gap:8px !important;}
+  .calH{text-align:center;font-size:12px;font-weight:800;color:#6b7280;padding:6px 0;}
+  .calCell{display:grid;place-items:center;width:100%;padding:10px 0;border-radius:12px;border:1px solid rgba(229,231,235,.95);background:rgba(255,255,255,.95);color:#111827;font-weight:800;}
+  .calCell.muted{background:transparent;border-color:transparent;pointer-events:none;}
+  .calCell.picked{background:rgba(37,99,235,.12) !important;border-color:rgba(37,99,235,.35) !important;color:#1d4ed8 !important;}
+  .calCell[data-date]:hover{border-color:rgba(37,99,235,.35);background:rgba(37,99,235,.06);cursor:pointer;}
+  `;
+  const s = document.createElement("style");
+  s.setAttribute("data-calendar-fix","1");
+  s.textContent = css;
+  document.head.appendChild(s);
+})();
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
