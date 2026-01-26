@@ -4,14 +4,29 @@ const msg = (t, ok=false) => {
   $("#msg").className = ok ? "msg ok" : "msg";
 };
 
-async function jget(url){ const r = await fetch(url); return r.json(); }
+async function fetchJson(url, options = {}, timeoutMs = 8000){
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try{
+    const r = await fetch(url, { ...options, signal: controller.signal });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return await r.json();
+  } finally {
+    clearTimeout(id);
+  }
+}
+async function jget(url){
+  return fetchJson(url);
+}
 async function jpost(url, body){
-  const r = await fetch(url,{ method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify(body) });
-  return r.json();
+  return fetchJson(url, {
+    method:"POST",
+    headers:{ "content-type":"application/json" },
+    body: JSON.stringify(body)
+  });
 }
 async function jdel(url){
-  const r = await fetch(url,{ method:"DELETE" });
-  return r.json();
+  return fetchJson(url, { method:"DELETE" });
 }
 
 /** ===== 缓存状态 ===== */
@@ -27,17 +42,32 @@ let state = {
 /** ===== 缓存加载（提速核心）===== */
 async function ensureRooms(force=false){
   if (!force && Array.isArray(state.rooms)) return state.rooms;
-  state.rooms = await jget("/api/rooms");
+  try{
+    state.rooms = await jget("/api/rooms");
+  }catch(e){
+    msg("❌ 加载教室失败，请稍后重试");
+    state.rooms = [];
+  }
   return state.rooms;
 }
 async function ensureClasses(force=false){
   if (!force && Array.isArray(state.classes)) return state.classes;
-  state.classes = await jget("/api/classes");
+  try{
+    state.classes = await jget("/api/classes");
+  }catch(e){
+    msg("❌ 加载班级失败，请稍后重试");
+    state.classes = [];
+  }
   return state.classes;
 }
 async function ensureCourses(force=false){
   if (!force && Array.isArray(state.courses)) return state.courses;
-  state.courses = await jget("/api/courses");
+  try{
+    state.courses = await jget("/api/courses");
+  }catch(e){
+    msg("❌ 加载课程失败，请稍后重试");
+    state.courses = [];
+  }
   return state.courses;
 }
 

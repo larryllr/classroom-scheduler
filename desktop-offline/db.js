@@ -1,6 +1,7 @@
 const path = require("path");
 const fs = require("fs");
 const Database = require("better-sqlite3");
+const { cleanCsvIds, isDate, toInt } = require("./utils");
 
 /* -------------------- response helpers -------------------- */
 function reply(res, data, code = 200) {
@@ -8,22 +9,6 @@ function reply(res, data, code = 200) {
 }
 function bad(res, msg, code = 400) {
   reply(res, { ok: false, message: msg }, code);
-}
-function isDate(d) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(d || "");
-}
-function toInt(v, def = 0) {
-  const n = Number(v);
-  return Number.isFinite(n) ? (n | 0) : def;
-}
-function cleanCsvIds(s) {
-  const raw = String(s || "").trim();
-  if (!raw) return "";
-  const ids = raw
-    .split(",")
-    .map((x) => Number(String(x).trim()))
-    .filter((x) => Number.isFinite(x) && x > 0);
-  return Array.from(new Set(ids)).join(",");
 }
 
 /* -------------------- slot meta (08:00-23:00, 90min, no gap) -------------------- */
@@ -61,7 +46,7 @@ function initDb(electronApp) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       size INTEGER NOT NULL,
-      allow_switch INTEGER NOT NULL DEFAULT 1,            -- 1可窜教室 0同日固定教室
+      allow_switch INTEGER NOT NULL DEFAULT 1,            -- 1可换教室 0同日固定教室
       preferred_room_ids TEXT,                            -- "1,2,3"
       avail_mask INTEGER NOT NULL DEFAULT ${FULL_MASK},    -- 可上时间段mask
       min_continuous INTEGER NOT NULL DEFAULT 1            -- 最少连续节数（对每个任务要求）
