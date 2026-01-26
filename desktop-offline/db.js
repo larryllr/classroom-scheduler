@@ -308,7 +308,7 @@ const api = {
           t.*,
           c.name AS class_name,
           te.name AS teacher_name,
-          COALESCE(te.subject, "") AS course_name
+          COALESCE(te.subject, '') AS course_name
         FROM tasks t
         LEFT JOIN classes c ON c.id=t.class_id
         LEFT JOIN teachers te ON te.id=t.teacher_id
@@ -561,7 +561,7 @@ const api = {
           s.date, s.time_index, s.room_id, r.name AS room_name,
           s.class_id, c.name AS class_name,
           s.teacher_id, te.name AS teacher_name,
-          s.task_id, COALESCE(te.subject, "") AS course_name
+          s.task_id, COALESCE(te.subject, '') AS course_name
         FROM schedule_slots s
         LEFT JOIN rooms r ON r.id=s.room_id
         LEFT JOIN classes c ON c.id=s.class_id
@@ -600,7 +600,7 @@ const api = {
           s.date, s.time_index, s.room_id, r.name AS room_name,
           s.class_id, c.name AS class_name,
           s.teacher_id, te.name AS teacher_name,
-          s.task_id, COALESCE(te.subject, "") AS course_name
+          s.task_id, COALESCE(te.subject, '') AS course_name
         FROM schedule_slots s
         LEFT JOIN rooms r ON r.id=s.room_id
         LEFT JOIN classes c ON c.id=s.class_id
