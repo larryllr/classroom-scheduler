@@ -80,6 +80,45 @@ window.tab = (key) => {
   render();
 };
 
+window.solveSchedule = async () => {
+  try {
+    clearStatus();
+    toast("开始排课…");
+    const r = await apiFetch("/api/solve", { method: "POST", body: JSON.stringify({}), timeout: 20000 });
+    toast(r.message || "排课完成");
+  } catch (e) {
+    setStatus("err", "排课失败：" + fmtErr(e));
+  }
+};
+
+window.exportData = async () => {
+  try {
+    const data = await apiFetch("/api/export");
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `宽宽牌教室分配系统备份_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    toast("已导出备份");
+  } catch (e) {
+    setStatus("err", "导出失败：" + fmtErr(e));
+  }
+};
+
+window.importData = async (file) => {
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const json = JSON.parse(text);
+    await apiFetch("/api/import", { method: "POST", body: JSON.stringify(json) });
+    toast("导入成功");
+    await loadAll();
+    render();
+  } catch (e) {
+    setStatus("err", "导入失败：" + fmtErr(e));
+  }
+};
+
 function render() {
   const app = $("#app");
   if (!state.meta) {
@@ -87,7 +126,6 @@ function render() {
     return;
   }
   app.innerHTML = renderTab();
-  bindCommon();
   if (state.activeTab === "rooms") bindRooms();
   if (state.activeTab === "classes") bindClasses();
   if (state.activeTab === "teachers") bindTeachers();
@@ -129,7 +167,7 @@ function renderRooms() {
     .join("");
 
   return `
-  <section class="grid">
+  <section class="grid2">
     <div class="card">
       <div class="cardTitle">新建教室</div>
       <div class="form">
@@ -183,7 +221,7 @@ function renderClasses() {
     .join("");
 
   return `
-  <section class="grid">
+  <section class="grid2">
     <div class="card">
       <div class="cardTitle">新建班级</div>
       <div class="form">
@@ -236,7 +274,7 @@ function renderTeachers() {
     .join("");
 
   return `
-  <section class="grid">
+  <section class="grid2">
     <div class="card">
       <div class="cardTitle">新建教师</div>
       <div class="form">
@@ -283,7 +321,7 @@ function renderTasks() {
     .join("");
 
   return `
-  <section class="grid">
+  <section class="grid2">
     <div class="card">
       <div class="cardTitle">添加排课任务（用日历批量选日期）</div>
       <div class="form">
@@ -355,39 +393,6 @@ function renderSchedule() {
 }
 
 /* ---------------- Binding ---------------- */
-function bindCommon() {
-  $("#btnExport")?.addEventListener("click", async () => {
-    try {
-      const data = await apiFetch("/api/export");
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = `宽宽牌教室分配系统备份_${new Date().toISOString().slice(0, 10)}.json`;
-      a.click();
-      toast("已导出备份");
-    } catch (e) {
-      setStatus("err", "导出失败：" + fmtErr(e));
-    }
-  });
-
-  $("#fileImport")?.addEventListener("change", async (ev) => {
-    const file = ev.target.files?.[0];
-    if (!file) return;
-    try {
-      const text = await file.text();
-      const json = JSON.parse(text);
-      await apiFetch("/api/import", { method: "POST", body: JSON.stringify(json) });
-      toast("导入成功");
-      await loadAll();
-      render();
-    } catch (e) {
-      setStatus("err", "导入失败：" + fmtErr(e));
-    } finally {
-      ev.target.value = "";
-    }
-  });
-}
-
 function bindTab() {
   $$(".tab").forEach((b) => {
     b.addEventListener("click", async () => {
@@ -948,31 +953,27 @@ function esc(s) {
 }
 
 async function boot() {
-  // 页面骨架（避免黑屏）
-  document.body.innerHTML = `
-  <div class="boot">
-    <div class="spinner"></div>
-    <div class="bootText">加载中…</div>
-    <div class="bootSub">如果超过10秒，请查看 last.log 或把报错复制给我。</div>
-  </div>`;
-
+  const app = $("#app");
+  setMsg("加载中…");
   try {
     // 先 ping，确认 API 活着
     await apiFetch("/api/ping", { timeout: 2500 });
 
     await loadAll();
     clearStatus();
-    document.body.innerHTML = `<div id="app"></div>`;
     render();
   } catch (e) {
     const msg = fmtErr(e);
-    document.body.innerHTML = `
-    <div class="boot err">
-      <div class="bootText">启动失败</div>
-      <div class="bootSub">原因：${esc(msg)}</div>
-      <div class="bootSub">请把 <b>last.log</b> 最后 30 行发给我，我能直接定位。</div>
-      <div class="bootSub">你也可以在浏览器地址栏打开：<code>/api/ping</code>、<code>/api/meta</code> 测试。</div>
-    </div>`;
+    setStatus("err", "启动失败：" + msg);
+    if (app) {
+      app.innerHTML = `
+      <div class="card">
+        <div class="cardTitle">启动失败</div>
+        <div class="meta">原因：${esc(msg)}</div>
+        <div class="meta">请把 <b>last.log</b> 最后 30 行发给我，我能直接定位。</div>
+        <div class="meta">你也可以在浏览器地址栏打开：<code>/api/ping</code>、<code>/api/meta</code> 测试。</div>
+      </div>`;
+    }
   }
 }
 
