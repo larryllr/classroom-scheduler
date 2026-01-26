@@ -367,8 +367,12 @@ const api = {
         }
       }
     });
-    tx();
-    reply(res, { ok: true, count: uniq.length });
+    try {
+      tx();
+      reply(res, { ok: true, count: uniq.length });
+    } catch (e) {
+      bad(res, e && e.message ? e.message : "添加任务失败");
+    }
   },
 
   delTask(db, req, res) {
@@ -681,8 +685,12 @@ const api = {
       }
     });
 
-    tx();
-    reply(res, { ok: true });
+    try {
+      tx();
+      reply(res, { ok: true });
+    } catch (e) {
+      bad(res, e && e.message ? e.message : "导入失败");
+    }
   },
 };
 
