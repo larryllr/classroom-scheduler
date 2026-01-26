@@ -20,7 +20,7 @@ body{
   margin:0;
   font-family:ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", Arial;
   color:var(--txt);
-  background: var(--bg);
+  background: linear-gradient(180deg, var(--bg-2), var(--bg));
 }
 .shell{max-width:1180px;margin:0 auto;padding:22px 18px 50px}
 .topbar{
