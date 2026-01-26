@@ -58,76 +58,41 @@ async function apiFetch(url, opts = {}) {
   }
 }
 
+function setMsg(text, type = "") {
+  const el = $("#msg");
+  if (!el) return;
+  el.className = "msg" + (type ? " " + type : "");
+  el.textContent = text;
+}
 function setStatus(kind, msg) {
-  const box = $("#status") || $("#msg");
-  if (!box) return;
-  box.className = `status ${kind}`;
-  box.textContent = msg;
-  box.style.display = "block";
+  const type = kind === "ok" ? "ok" : kind === "err" ? "bad" : "";
+  setMsg(msg, type);
 }
-
 function clearStatus() {
-  const box = $("#status") || $("#msg");
-  if (!box) return;
-  box.style.display = "none";
+  setMsg("");
+}
+function toast(msg) {
+  setMsg(msg, "ok");
 }
 
-function toast(msg) {
-  const t = $("#toast");
-  t.textContent = msg;
-  t.classList.add("show");
-  setTimeout(() => t.classList.remove("show"), 1800);
-}
+window.tab = (key) => {
+  state.activeTab = key === "schedules" ? "schedule" : key;
+  render();
+};
 
 function render() {
-  $("#app").innerHTML = `
-  <div class="shell">
-    <header class="topbar">
-      <div class="brand">
-        <div class="logo">宽</div>
-        <div>
-          <div class="title">宽宽牌教室分配系统</div>
-          <div class="sub">流程：教室 → 班级 → 教师 → 排课任务（日历） → 一键排课 → 复制发群</div>
-        </div>
-      </div>
-      <div class="actions">
-        <button class="btn ghost" id="btnExport">导出备份</button>
-        <label class="btn ghost file">
-          导入备份<input type="file" id="fileImport" accept="application/json" />
-        </label>
-      </div>
-    </header>
-
-    <div id="status" class="status" style="display:none"></div>
-
-    <nav class="tabs">
-      ${tabBtn("rooms", "教室")}
-      ${tabBtn("classes", "班级")}
-      ${tabBtn("teachers", "教师")}
-      ${tabBtn("tasks", "排课任务")}
-      ${tabBtn("schedule", "课表")}
-    </nav>
-
-    <main class="main">
-      ${renderTab()}
-    </main>
-
-    <footer class="footer">
-      <div class="hint">小提示：如果一直“加载中”，去看 <b>last.log</b> 里是否有 <code>/api/*</code> 请求报错。</div>
-      <div class="hint">时间段：08:00–23:00，90分钟/节，无间隔；排课结果可按“教室课表/教师课表”分别生成。</div>
-    </footer>
-
-    <div id="toast" class="toast"></div>
-  </div>
-  `;
-
+  const app = $("#app");
+  if (!state.meta) {
+    app.innerHTML = `<div class="card"><div class="meta">加载中…</div></div>`;
+    return;
+  }
+  app.innerHTML = renderTab();
   bindCommon();
-  bindTab();
-}
-
-function tabBtn(key, text) {
-  const active = state.activeTab === key ? "active" : "";
-  return `<button class="tab ${active}" data-tab="${key}">${text}</button>`;
+  if (state.activeTab === "rooms") bindRooms();
+  if (state.activeTab === "classes") bindClasses();
+  if (state.activeTab === "teachers") bindTeachers();
+  if (state.activeTab === "tasks") bindTasks();
+  if (state.activeTab === "schedule") bindSchedule();
 }
 
 function renderTab() {
@@ -164,7 +129,7 @@ function renderRooms() {
     .join("");
 
   return `
-  <section class="grid2">
+  <section class="grid">
     <div class="card">
       <div class="cardTitle">新建教室</div>
       <div class="form">
@@ -218,7 +183,7 @@ function renderClasses() {
     .join("");
 
   return `
-  <section class="grid2">
+  <section class="grid">
     <div class="card">
       <div class="cardTitle">新建班级</div>
       <div class="form">
@@ -271,7 +236,7 @@ function renderTeachers() {
     .join("");
 
   return `
-  <section class="grid2">
+  <section class="grid">
     <div class="card">
       <div class="cardTitle">新建教师</div>
       <div class="form">
@@ -318,7 +283,7 @@ function renderTasks() {
     .join("");
 
   return `
-  <section class="grid2">
+  <section class="grid">
     <div class="card">
       <div class="cardTitle">添加排课任务（用日历批量选日期）</div>
       <div class="form">
