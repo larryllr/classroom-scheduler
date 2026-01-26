@@ -4,102 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>宽宽牌教室分配系统</title>
-  <style>
-    :root{
-      --bg:#0b1220;
-      --card:rgba(255,255,255,.06);
-      --bd:rgba(255,255,255,.12);
-      --txt:#eef3ff;
-      --muted:#9fb0d0;
-      --pri:rgba(110,168,255,.22);
-      --pri-bd:rgba(110,168,255,.42);
-      --danger:rgba(255,120,120,.18);
-      --danger-bd:rgba(255,120,120,.40);
-      --ok:rgba(69,212,131,.18);
-      --ok-bd:rgba(69,212,131,.40);
-      --shadow:0 10px 30px rgba(0,0,0,.35);
-      --r:18px;
-    }
-    *{box-sizing:border-box}
-    body{
-      margin:0;
-      font-family:ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", Arial;
-      color:var(--txt);
-      background:
-        radial-gradient(1200px 600px at 20% -10%, rgba(110,168,255,.35), transparent),
-        radial-gradient(900px 500px at 90% 0%, rgba(69,212,131,.25), transparent),
-        var(--bg);
-    }
-    .wrap{max-width:1180px;margin:0 auto;padding:18px 14px 40px}
-    .top{
-      display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
-      padding:16px;border-radius:var(--r);border:1px solid var(--bd);
-      background:linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.04));
-      box-shadow:var(--shadow);
-    }
-    .brand{display:flex;flex-direction:column;gap:4px}
-    .brand .t{font-size:20px;font-weight:900;letter-spacing:.6px}
-    .brand .s{font-size:12px;color:var(--muted);line-height:1.4}
-    .tabs{display:flex;gap:8px;flex-wrap:wrap}
-    .tabs button{
-      border:1px solid var(--bd);background:rgba(255,255,255,.04);color:var(--txt);
-      padding:10px 12px;border-radius:14px;cursor:pointer;font-weight:800
-    }
-    .tabs button.primary{border-color:var(--pri-bd);background:var(--pri)}
-    .tabs button.danger{border-color:var(--danger-bd);background:var(--danger)}
-    .msg{margin-top:10px;padding:10px 12px;border-radius:14px;border:1px solid var(--bd);background:rgba(255,255,255,.04);color:var(--muted)}
-    .msg.ok{border-color:var(--ok-bd);background:var(--ok);color:#d9ffe8}
-    .msg.bad{border-color:var(--danger-bd);background:var(--danger);color:#ffe2e2}
-    #app{margin-top:14px}
-    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-    @media (max-width: 980px){ .grid{grid-template-columns:1fr} }
-    h3{margin:0 0 10px 0;font-size:16px}
-    .card{
-      border:1px solid var(--bd);background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
-      border-radius:var(--r);padding:14px;box-shadow:var(--shadow)
-    }
-    .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-    @media (max-width: 600px){ .row{grid-template-columns:1fr} }
-    input,select{
-      width:100%;padding:12px 12px;border-radius:14px;border:1px solid rgba(0,0,0,.10);
-      background:rgba(255,255,255,.94);color:#0b1220;outline:none;
-    }
-    select{cursor:pointer}
-    button{
-      border:1px solid var(--bd);background:rgba(255,255,255,.04);color:var(--txt);
-      padding:10px 12px;border-radius:14px;cursor:pointer;font-weight:900
-    }
-    button.primary{border-color:var(--pri-bd);background:var(--pri)}
-    button.danger{border-color:var(--danger-bd);background:var(--danger)}
-    button.small{padding:8px 10px;border-radius:12px;font-weight:800}
-    .meta{color:var(--muted);font-size:12px;line-height:1.55}
-    .list{display:flex;flex-direction:column;gap:10px}
-    .item{
-      display:flex;justify-content:space-between;gap:10px;align-items:flex-start;
-      padding:12px;border-radius:16px;border:1px solid var(--bd);background:rgba(255,255,255,.03)
-    }
-    .item .left{display:flex;flex-direction:column;gap:2px}
-    .item .t{font-weight:900}
-    .item .s{color:var(--muted);font-size:12px}
-    pre{
-      white-space:pre-wrap;word-break:break-word;
-      padding:12px;border-radius:16px;border:1px solid var(--bd);background:rgba(0,0,0,.18);
-      color:var(--txt);min-height:140px
-    }
-    .cal{margin-top:12px;border:1px solid var(--bd);border-radius:16px;padding:12px;background:rgba(255,255,255,.03)}
-    .calhead{display:flex;align-items:center;justify-content:space-between;gap:10px}
-    .calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin-top:8px}
-    .dow{color:var(--muted);font-size:12px;text-align:center;padding:6px 0}
-    .day{padding:10px 0;border-radius:12px;text-align:center;border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.02);cursor:pointer}
-    .day.off{opacity:.35;cursor:default}
-    .day.on{border-color:var(--pri-bd);background:var(--pri);font-weight:900}
-    .pill{
-      display:inline-flex;align-items:center;gap:8px;
-      border:1px solid var(--bd);background:rgba(255,255,255,.04);
-      padding:10px 12px;border-radius:14px;cursor:pointer
-    }
-    .tools{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
-  </style>
+  <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
   <div class="wrap">
@@ -108,7 +13,7 @@
         <div class="t">宽宽牌教室分配系统</div>
         <div class="s">
           时间规则：每天 08:00–23:00，90分钟/节，无间隔（共10个时间段）<br/>
-          流程：教室 → 班级（人数/偏好/可上时间段） → 教师（可上时间段） → 排课任务（日历选日期+课程+教师+连续几节） → 一键排课 → 复制课表发群
+          流程：教室 → 班级（人数/偏好/可上时间段） → 教师（可上时间段/科目） → 排课任务（日历选日期+教师+时间段） → 一键排课 → 复制课表发群
         </div>
       </div>
       <div class="tabs">

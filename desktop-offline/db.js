@@ -1,6 +1,7 @@
 const path = require("path");
 const fs = require("fs");
 const Database = require("better-sqlite3");
+const { cleanCsvIds, isDate, toInt } = require("./utils");
 
 /* -------------------- response helpers -------------------- */
 function reply(res, data, code = 200) {
@@ -8,22 +9,6 @@ function reply(res, data, code = 200) {
 }
 function bad(res, msg, code = 400) {
   reply(res, { ok: false, message: msg }, code);
-}
-function isDate(d) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(d || "");
-}
-function toInt(v, def = 0) {
-  const n = Number(v);
-  return Number.isFinite(n) ? (n | 0) : def;
-}
-function cleanCsvIds(s) {
-  const raw = String(s || "").trim();
-  if (!raw) return "";
-  const ids = raw
-    .split(",")
-    .map((x) => Number(String(x).trim()))
-    .filter((x) => Number.isFinite(x) && x > 0);
-  return Array.from(new Set(ids)).join(",");
 }
 
 /* -------------------- slot meta (08:00-23:00, 90min, no gap) -------------------- */
@@ -61,27 +46,25 @@ function initDb(electronApp) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       size INTEGER NOT NULL,
-      allow_switch INTEGER NOT NULL DEFAULT 1,            -- 1可窜教室 0同日固定教室
+      allow_switch INTEGER NOT NULL DEFAULT 1,            -- 1可换教室 0同日固定教室
       preferred_room_ids TEXT,                            -- "1,2,3"
-      avail_mask INTEGER NOT NULL DEFAULT ${FULL_MASK},    -- 可上时间段mask
-      min_continuous INTEGER NOT NULL DEFAULT 1            -- 最少连续节数（对每个任务要求）
+      avail_mask INTEGER NOT NULL DEFAULT ${FULL_MASK}     -- 可上时间段mask
     );
 
     CREATE TABLE IF NOT EXISTS teachers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
-      avail_mask INTEGER NOT NULL DEFAULT ${FULL_MASK},
-      min_continuous INTEGER NOT NULL DEFAULT 1
+      subject TEXT,
+      avail_mask INTEGER NOT NULL DEFAULT ${FULL_MASK}
     );
 
-    -- 排课任务：某班某日上一门课，由某老师上，连续若干节（90分钟/节）
+    -- 排课任务：某班某日由老师在指定时间段授课（90分钟/节）
     CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       class_id INTEGER NOT NULL,
       teacher_id INTEGER NOT NULL,
       date TEXT NOT NULL,
-      course_name TEXT NOT NULL,
-      periods INTEGER NOT NULL DEFAULT 1,
+      time_index INTEGER,
       prefer_room_ids TEXT
     );
 
@@ -103,6 +86,15 @@ function initDb(electronApp) {
     CREATE INDEX IF NOT EXISTS idx_sched_class ON schedule_slots(date, class_id, time_index);
   `);
 
+  const ensureColumn = (table, column, def) => {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+    if (!cols.find((c) => c.name === column)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${def}`);
+    }
+  };
+  ensureColumn("teachers", "subject", "TEXT");
+  ensureColumn("tasks", "time_index", "INTEGER");
+
   return db;
 }
 
@@ -120,6 +112,15 @@ function hasAll(mask, need) {
 }
 function overlapMask(a, b) {
   return (a & b) !== 0;
+}
+function isPrefixMask(mask) {
+  let sawZero = false;
+  for (let i = 0; i < SLOTS.length; i++) {
+    const on = (mask & (1 << i)) !== 0;
+    if (!on) sawZero = true;
+    if (on && sawZero) return false;
+  }
+  return true;
 }
 function orderedRoomsGlobal(rooms) {
   const r = [...rooms];
@@ -200,13 +201,13 @@ const api = {
     const allow_switch = req.body?.allow_switch ? 1 : 0;
     const preferred_room_ids = cleanCsvIds(req.body?.preferred_room_ids);
     const avail_mask = toInt(req.body?.avail_mask, FULL_MASK);
-    const min_continuous = Math.max(1, toInt(req.body?.min_continuous, 1));
     if (!name) return bad(res, "请填写班级名称");
     if (!Number.isFinite(size) || size <= 0) return bad(res, "人数必须是正数");
     if (avail_mask < 0 || avail_mask > FULL_MASK) return bad(res, "班级可上时间段设置错误");
+    if (!isPrefixMask(avail_mask)) return bad(res, "班级可上时间段需从第一节开始连续勾选");
     db.prepare(
-      "INSERT INTO classes(name,size,allow_switch,preferred_room_ids,avail_mask,min_continuous) VALUES (?,?,?,?,?,?)"
-    ).run(name, size, allow_switch, preferred_room_ids, avail_mask, min_continuous);
+      "INSERT INTO classes(name,size,allow_switch,preferred_room_ids,avail_mask) VALUES (?,?,?,?,?)"
+    ).run(name, size, allow_switch, preferred_room_ids, avail_mask);
     reply(res, { ok: true });
   },
   updateClass(db, req, res) {
@@ -217,14 +218,14 @@ const api = {
     const allow_switch = req.body?.allow_switch ? 1 : 0;
     const preferred_room_ids = cleanCsvIds(req.body?.preferred_room_ids);
     const avail_mask = toInt(req.body?.avail_mask, FULL_MASK);
-    const min_continuous = Math.max(1, toInt(req.body?.min_continuous, 1));
     if (!name) return bad(res, "请填写班级名称");
     if (!Number.isFinite(size) || size <= 0) return bad(res, "人数必须是正数");
     if (avail_mask < 0 || avail_mask > FULL_MASK) return bad(res, "班级可上时间段设置错误");
+    if (!isPrefixMask(avail_mask)) return bad(res, "班级可上时间段需从第一节开始连续勾选");
 
     db.prepare(
-      "UPDATE classes SET name=?, size=?, allow_switch=?, preferred_room_ids=?, avail_mask=?, min_continuous=? WHERE id=?"
-    ).run(name, size, allow_switch, preferred_room_ids, avail_mask, min_continuous, id);
+      "UPDATE classes SET name=?, size=?, allow_switch=?, preferred_room_ids=?, avail_mask=? WHERE id=?"
+    ).run(name, size, allow_switch, preferred_room_ids, avail_mask, id);
 
     reply(res, { ok: true });
   },
@@ -247,29 +248,27 @@ const api = {
   },
   addTeacher(db, req, res) {
     const name = String(req.body?.name || "").trim();
+    const subject = String(req.body?.subject || "").trim();
     const avail_mask = toInt(req.body?.avail_mask, FULL_MASK);
-    const min_continuous = Math.max(1, toInt(req.body?.min_continuous, 1));
     if (!name) return bad(res, "请填写教师姓名");
     if (avail_mask < 0 || avail_mask > FULL_MASK) return bad(res, "教师可上时间段设置错误");
-    db.prepare("INSERT INTO teachers(name,avail_mask,min_continuous) VALUES (?,?,?)").run(
-      name,
-      avail_mask,
-      min_continuous
-    );
+    if (!isPrefixMask(avail_mask)) return bad(res, "教师可上时间段需从第一节开始连续勾选");
+    db.prepare("INSERT INTO teachers(name,subject,avail_mask) VALUES (?,?,?)").run(name, subject, avail_mask);
     reply(res, { ok: true });
   },
   updateTeacher(db, req, res) {
     const id = toInt(req.params.id);
     if (!id) return bad(res, "教师ID错误");
     const name = String(req.body?.name || "").trim();
+    const subject = String(req.body?.subject || "").trim();
     const avail_mask = toInt(req.body?.avail_mask, FULL_MASK);
-    const min_continuous = Math.max(1, toInt(req.body?.min_continuous, 1));
     if (!name) return bad(res, "请填写教师姓名");
     if (avail_mask < 0 || avail_mask > FULL_MASK) return bad(res, "教师可上时间段设置错误");
-    db.prepare("UPDATE teachers SET name=?, avail_mask=?, min_continuous=? WHERE id=?").run(
+    if (!isPrefixMask(avail_mask)) return bad(res, "教师可上时间段需从第一节开始连续勾选");
+    db.prepare("UPDATE teachers SET name=?, subject=?, avail_mask=? WHERE id=?").run(
       name,
+      subject,
       avail_mask,
-      min_continuous,
       id
     );
     reply(res, { ok: true });
@@ -308,7 +307,8 @@ const api = {
         SELECT
           t.*,
           c.name AS class_name,
-          te.name AS teacher_name
+          te.name AS teacher_name,
+          COALESCE(te.subject, "") AS course_name
         FROM tasks t
         LEFT JOIN classes c ON c.id=t.class_id
         LEFT JOIN teachers te ON te.id=t.teacher_id
@@ -323,38 +323,49 @@ const api = {
 
   addTaskDates(db, req, res) {
     const class_id = toInt(req.body?.class_id);
-    const teacher_id = toInt(req.body?.teacher_id);
-    const course_name = String(req.body?.course_name || "").trim();
-    const periods = Math.max(1, toInt(req.body?.periods, 1));
+    const teacher_ids = Array.isArray(req.body?.teacher_ids)
+      ? req.body.teacher_ids.map((t) => toInt(t)).filter(Boolean)
+      : [toInt(req.body?.teacher_id)].filter(Boolean);
+    const time_indexes = Array.isArray(req.body?.time_indexes)
+      ? req.body.time_indexes.map((t) => toInt(t)).filter((t) => Number.isFinite(t))
+      : [toInt(req.body?.time_index)].filter((t) => Number.isFinite(t));
     const prefer_room_ids = cleanCsvIds(req.body?.prefer_room_ids);
 
     const dates = Array.isArray(req.body?.dates) ? req.body.dates.map(String) : [];
 
     if (!class_id) return bad(res, "请选择班级");
-    if (!teacher_id) return bad(res, "请选择教师");
-    if (!course_name) return bad(res, "请填写课程名称");
+    if (!teacher_ids.length) return bad(res, "请选择教师");
+    if (!time_indexes.length) return bad(res, "请选择时间段");
     if (!dates.length) return bad(res, "请从日历选择至少1个日期");
     if (dates.some((d) => !isDate(d))) return bad(res, "日期格式错误（应为 YYYY-MM-DD）");
-    if (periods < 1 || periods > SLOTS.length) return bad(res, "连续节数不合法");
+    if (time_indexes.some((t) => t < 0 || t >= SLOTS.length)) return bad(res, "时间段不合法");
 
     const cls = db.prepare("SELECT * FROM classes WHERE id=?").get(class_id);
     if (!cls) return bad(res, "班级不存在");
-    const te = db.prepare("SELECT * FROM teachers WHERE id=?").get(teacher_id);
-    if (!te) return bad(res, "教师不存在");
-
-    // 连续节约束：任务的连续节必须 >= 班级最少连续、教师最少连续
-    const cMin = Math.max(1, toInt(cls.min_continuous, 1));
-    const tMin = Math.max(1, toInt(te.min_continuous, 1));
-    if (periods < cMin) return bad(res, `连续节数不足：班级「${cls.name}」最少连续 ${cMin} 节`);
-    if (periods < tMin) return bad(res, `连续节数不足：教师「${te.name}」最少连续 ${tMin} 节`);
+    const classAvail = toInt(cls.avail_mask, FULL_MASK);
 
     const uniq = Array.from(new Set(dates)).sort();
     const ins = db.prepare(
-      "INSERT INTO tasks(class_id,teacher_id,date,course_name,periods,prefer_room_ids) VALUES (?,?,?,?,?,?)"
+      "INSERT INTO tasks(class_id,teacher_id,date,time_index,prefer_room_ids) VALUES (?,?,?,?,?)"
     );
 
     const tx = db.transaction(() => {
-      for (const d of uniq) ins.run(class_id, teacher_id, d, course_name, periods, prefer_room_ids);
+      for (const d of uniq) {
+        for (const teacher_id of teacher_ids) {
+          const te = db.prepare("SELECT * FROM teachers WHERE id=?").get(teacher_id);
+          if (!te) throw new Error("教师不存在");
+          const teacherAvail = toInt(te.avail_mask, FULL_MASK);
+          for (const idx of time_indexes) {
+            if ((classAvail & (1 << idx)) === 0) {
+              throw new Error(`班级「${cls.name}」不可上 ${SLOTS[idx]?.start}-${SLOTS[idx]?.end}`);
+            }
+            if ((teacherAvail & (1 << idx)) === 0) {
+              throw new Error(`教师「${te.name}」不可上 ${SLOTS[idx]?.start}-${SLOTS[idx]?.end}`);
+            }
+            ins.run(class_id, teacher_id, d, idx, prefer_room_ids);
+          }
+        }
+      }
     });
     tx();
     reply(res, { ok: true, count: uniq.length });
@@ -380,12 +391,12 @@ const api = {
       .prepare(
         `
         SELECT t.*,
-               c.name AS class_name, c.size AS class_size, c.allow_switch, c.preferred_room_ids, c.avail_mask AS class_avail_mask, c.min_continuous AS class_min_cont,
-               te.name AS teacher_name, te.avail_mask AS teacher_avail_mask, te.min_continuous AS teacher_min_cont
+               c.name AS class_name, c.size AS class_size, c.allow_switch, c.preferred_room_ids, c.avail_mask AS class_avail_mask,
+               te.name AS teacher_name, te.avail_mask AS teacher_avail_mask, te.subject AS teacher_subject
         FROM tasks t
         LEFT JOIN classes c ON c.id=t.class_id
         LEFT JOIN teachers te ON te.id=t.teacher_id
-        ORDER BY t.date ASC, t.id ASC
+        ORDER BY t.date ASC, t.time_index ASC, t.id ASC
       `
       )
       .all();
@@ -395,33 +406,17 @@ const api = {
     if (!teachers.length) return bad(res, "还没有教师");
     if (!tasks.length) return bad(res, "还没有排课任务（先去“排课任务”里用日历批量添加）");
 
-    // 基本校验：班级/教师存在
     for (const t of tasks) {
       if (!t.class_name) return bad(res, `存在任务引用了不存在的班级（task_id=${t.id}）`);
       if (!t.teacher_name) return bad(res, `存在任务引用了不存在的教师（task_id=${t.id}）`);
-      const p = toInt(t.periods, 1);
-      if (p < 1 || p > SLOTS.length) return bad(res, `任务连续节数非法（task_id=${t.id}）`);
-      const cMin = Math.max(1, toInt(t.class_min_cont, 1));
-      const teMin = Math.max(1, toInt(t.teacher_min_cont, 1));
-      if (p < cMin) return bad(res, `任务连续节数不足：班级「${t.class_name}」最少连续 ${cMin} 节（task_id=${t.id}）`);
-      if (p < teMin) return bad(res, `任务连续节数不足：教师「${t.teacher_name}」最少连续 ${teMin} 节（task_id=${t.id}）`);
+      if (t.time_index == null || t.time_index < 0 || t.time_index >= SLOTS.length) {
+        return bad(res, `任务缺少时间段（task_id=${t.id}）`);
+      }
     }
 
-    const roomsById = new Map(rooms.map((r) => [Number(r.id), r]));
-    const roomsSorted = orderedRoomsGlobal(rooms);
-
-    // 按日期分组
-    const byDate = new Map();
-    for (const t of tasks) {
-      if (!byDate.has(t.date)) byDate.set(t.date, []);
-      byDate.get(t.date).push(t);
-    }
-
-    // 占用表：使用bitmask表示某天的10个时间段占用情况
     const roomOcc = {};    // roomOcc[date][roomId] = mask
     const teacherOcc = {}; // teacherOcc[date][teacherId] = mask
     const classOcc = {};   // classOcc[date][classId] = mask
-    const classFixedRoom = {}; // classFixedRoom[date][classId] = roomId
 
     function getOcc(map, date, id) {
       map[date] ||= {};
@@ -438,115 +433,93 @@ const api = {
     const insSlot = db.prepare(
       "INSERT INTO schedule_slots(date,time_index,room_id,class_id,teacher_id,task_id) VALUES (?,?,?,?,?,?)"
     );
+    const roomsSorted = orderedRoomsGlobal(rooms);
+    const orderedRoomsForClass = (cls) => orderedRoomsFor(cls, null, roomsSorted);
+
+    const fixedGroups = new Map();
+    const flexTasks = [];
+    for (const t of tasks) {
+      const key = `${t.class_id}-${t.date}`;
+      if (Number(t.allow_switch) === 0) {
+        if (!fixedGroups.has(key)) fixedGroups.set(key, []);
+        fixedGroups.get(key).push(t);
+      } else {
+        flexTasks.push(t);
+      }
+    }
 
     const tx = db.transaction(() => {
       delAll.run();
 
-      // 每天单独排（互不影响）
-      const dates = Array.from(byDate.keys()).sort();
-      for (const date of dates) {
-        const dayTasks = byDate.get(date);
+      for (const list of fixedGroups.values()) {
+        list.sort((a, b) => a.time_index - b.time_index);
+        const cls = list[0];
+        const classId = Number(cls.class_id);
+        const size = Number(cls.class_size);
+        const date = cls.date;
 
-        // 难度排序：先排“连续节数多/班级人数多”的
-        dayTasks.sort(
-          (a, b) =>
-            toInt(b.periods) - toInt(a.periods) ||
-            toInt(b.class_size) - toInt(a.class_size) ||
-            String(a.class_name).localeCompare(String(b.class_name)) ||
-            a.id - b.id
-        );
+        let chosenRoom = null;
+        for (const room of orderedRoomsForClass(cls)) {
+          if (room.capacity < size) continue;
+          let ok = true;
+          for (const t of list) {
+            const slot = Number(t.time_index);
+            const classOccMask = getOcc(classOcc, date, classId);
+            const roomOccMask = getOcc(roomOcc, date, room.id);
+            const teacherOccMask = getOcc(teacherOcc, date, t.teacher_id);
+            if (overlapMask(classOccMask, 1 << slot)) { ok = false; break; }
+            if (overlapMask(roomOccMask, 1 << slot)) { ok = false; break; }
+            if (overlapMask(teacherOccMask, 1 << slot)) { ok = false; break; }
+          }
+          if (ok) { chosenRoom = room; break; }
+        }
 
-        for (const t of dayTasks) {
-          const periods = toInt(t.periods, 1);
-          const classId = Number(t.class_id);
+        if (!chosenRoom) {
+          throw new Error(`无可行解：${date}（${cls.class_name}）设置为“同日固定教室”，但无法找到满足容量/冲突的教室。`);
+        }
+
+        for (const t of list) {
+          const slot = Number(t.time_index);
           const teacherId = Number(t.teacher_id);
-          const clsSize = toInt(t.class_size);
-
-          const cAvail = toInt(t.class_avail_mask, FULL_MASK);
-          const teAvail = toInt(t.teacher_avail_mask, FULL_MASK);
-
-          // 允许的时间段=班级可上 & 教师可上
-          const allowMask = cAvail & teAvail;
-
-          // 若 allowMask 本身太少，直接报错更友好
-          // （但仍要考虑连续 periods 的情况）
-          let anyContinuousPossible = false;
-          for (let start = 0; start + periods <= SLOTS.length; start++) {
-            const m = blockMask(start, periods);
-            if (hasAll(allowMask, m)) {
-              anyContinuousPossible = true;
-              break;
-            }
+          const classOccMask = getOcc(classOcc, date, classId);
+          const roomOccMask = getOcc(roomOcc, date, chosenRoom.id);
+          const teacherOccMask = getOcc(teacherOcc, date, teacherId);
+          if (overlapMask(classOccMask, 1 << slot) || overlapMask(roomOccMask, 1 << slot) || overlapMask(teacherOccMask, 1 << slot)) {
+            throw new Error(`无可行解：${date}（${t.class_name} - ${t.teacher_name}）时间段冲突。`);
           }
-          if (!anyContinuousPossible) {
-            throw new Error(
-              `无可行解：${date}（${t.class_name} - ${t.course_name} - ${t.teacher_name}）连续 ${periods} 节在可上时间段内放不下（班级/教师限制太紧）。`
-            );
-          }
+          setOcc(classOcc, date, classId, classOccMask | (1 << slot));
+          setOcc(roomOcc, date, chosenRoom.id, roomOccMask | (1 << slot));
+          setOcc(teacherOcc, date, teacherId, teacherOccMask | (1 << slot));
+          insSlot.run(date, slot, chosenRoom.id, classId, teacherId, t.id);
+        }
+      }
 
-          // 同日固定教室：若班级 allow_switch=0，一旦选定当天教室后必须一致
-          const fixed = (Number(t.allow_switch) === 0);
-          classFixedRoom[date] ||= {};
-          const fixedRoomId = classFixedRoom[date][String(classId)] || 0;
+      for (const t of flexTasks) {
+        const slot = Number(t.time_index);
+        const date = t.date;
+        const classId = Number(t.class_id);
+        const teacherId = Number(t.teacher_id);
+        const classOccMask = getOcc(classOcc, date, classId);
+        const teacherOccMask = getOcc(teacherOcc, date, teacherId);
+        if (overlapMask(classOccMask, 1 << slot) || overlapMask(teacherOccMask, 1 << slot)) {
+          throw new Error(`无可行解：${date}（${t.class_name} - ${t.teacher_name}）时间段冲突。`);
+        }
 
-          // 教室候选顺序：任务偏好 > 班级偏好 > 教室优先级
-          const roomOrder = orderedRoomsFor(
-            t, // 用 t 里带的 preferred_room_ids
-            t.prefer_room_ids,
-            roomsSorted
-          );
+        let placed = false;
+        for (const room of orderedRoomsForClass(t)) {
+          if (room.capacity < t.class_size) continue;
+          const roomOccMask = getOcc(roomOcc, date, room.id);
+          if (overlapMask(roomOccMask, 1 << slot)) continue;
+          setOcc(classOcc, date, classId, classOccMask | (1 << slot));
+          setOcc(roomOcc, date, room.id, roomOccMask | (1 << slot));
+          setOcc(teacherOcc, date, teacherId, teacherOccMask | (1 << slot));
+          insSlot.run(date, slot, room.id, classId, teacherId, t.id);
+          placed = true;
+          break;
+        }
 
-          let placed = false;
-
-          // 遍历候选教室
-          for (const room of roomOrder) {
-            if (toInt(room.capacity) < clsSize) continue;
-
-            // 固定教室限制
-            if (fixed && fixedRoomId && Number(room.id) !== Number(fixedRoomId)) continue;
-
-            // 房间占用mask
-            const rOcc = getOcc(roomOcc, date, room.id);
-            const teOcc = getOcc(teacherOcc, date, teacherId);
-            const clOcc = getOcc(classOcc, date, classId);
-
-            // 遍历所有可能连续块
-            for (let start = 0; start + periods <= SLOTS.length; start++) {
-              const m = blockMask(start, periods);
-
-              // 1) 必须处于 allowMask
-              if (!hasAll(allowMask, m)) continue;
-
-              // 2) 房间/教师/班级不冲突
-              if (overlapMask(rOcc, m)) continue;
-              if (overlapMask(teOcc, m)) continue;
-              if (overlapMask(clOcc, m)) continue;
-
-              // OK，落位
-              setOcc(roomOcc, date, room.id, rOcc | m);
-              setOcc(teacherOcc, date, teacherId, teOcc | m);
-              setOcc(classOcc, date, classId, clOcc | m);
-
-              if (fixed && !fixedRoomId) {
-                classFixedRoom[date][String(classId)] = Number(room.id);
-              }
-
-              for (let k = 0; k < periods; k++) {
-                insSlot.run(date, start + k, room.id, classId, teacherId, t.id);
-              }
-
-              placed = true;
-              break;
-            }
-
-            if (placed) break;
-          }
-
-          if (!placed) {
-            throw new Error(
-              `无可行解：${date}（${t.class_name} - ${t.course_name} - ${t.teacher_name}）无法安排连续 ${periods} 节：可能是教室容量不足/同日固定教室/时间段冲突。`
-            );
-          }
+        if (!placed) {
+          throw new Error(`无可行解：${date}（${t.class_name} - ${t.teacher_name}）无法安排该时间段：可能是教室容量不足/时间段冲突。`);
         }
       }
     });
@@ -584,12 +557,11 @@ const api = {
           s.date, s.time_index, s.room_id, r.name AS room_name,
           s.class_id, c.name AS class_name,
           s.teacher_id, te.name AS teacher_name,
-          s.task_id, t.course_name
+          s.task_id, COALESCE(te.subject, "") AS course_name
         FROM schedule_slots s
         LEFT JOIN rooms r ON r.id=s.room_id
         LEFT JOIN classes c ON c.id=s.class_id
         LEFT JOIN teachers te ON te.id=s.teacher_id
-        LEFT JOIN tasks t ON t.id=s.task_id
         ${where}
         ORDER BY r.name ASC, s.date ASC, s.time_index ASC, c.name ASC
       `
@@ -624,12 +596,11 @@ const api = {
           s.date, s.time_index, s.room_id, r.name AS room_name,
           s.class_id, c.name AS class_name,
           s.teacher_id, te.name AS teacher_name,
-          s.task_id, t.course_name
+          s.task_id, COALESCE(te.subject, "") AS course_name
         FROM schedule_slots s
         LEFT JOIN rooms r ON r.id=s.room_id
         LEFT JOIN classes c ON c.id=s.class_id
         LEFT JOIN teachers te ON te.id=s.teacher_id
-        LEFT JOIN tasks t ON t.id=s.task_id
         ${where}
         ORDER BY te.name ASC, s.date ASC, s.time_index ASC, c.name ASC
       `
@@ -669,33 +640,31 @@ const api = {
       }
       for (const c of d.classes || []) {
         db.prepare(
-          "INSERT INTO classes(id,name,size,allow_switch,preferred_room_ids,avail_mask,min_continuous) VALUES (?,?,?,?,?,?,?)"
+          "INSERT INTO classes(id,name,size,allow_switch,preferred_room_ids,avail_mask) VALUES (?,?,?,?,?,?)"
         ).run(
           c.id,
           c.name,
           c.size,
           c.allow_switch,
           c.preferred_room_ids,
-          c.avail_mask ?? FULL_MASK,
-          c.min_continuous ?? 1
+          c.avail_mask ?? FULL_MASK
         );
       }
       for (const t of d.teachers || []) {
-        db.prepare("INSERT INTO teachers(id,name,avail_mask,min_continuous) VALUES (?,?,?,?)").run(
+        db.prepare("INSERT INTO teachers(id,name,subject,avail_mask) VALUES (?,?,?,?)").run(
           t.id,
           t.name,
-          t.avail_mask ?? FULL_MASK,
-          t.min_continuous ?? 1
+          t.subject ?? "",
+          t.avail_mask ?? FULL_MASK
         );
       }
       for (const t of d.tasks || []) {
-        db.prepare("INSERT INTO tasks(id,class_id,teacher_id,date,course_name,periods,prefer_room_ids) VALUES (?,?,?,?,?,?,?)").run(
+        db.prepare("INSERT INTO tasks(id,class_id,teacher_id,date,time_index,prefer_room_ids) VALUES (?,?,?,?,?,?)").run(
           t.id,
           t.class_id,
           t.teacher_id,
           t.date,
-          t.course_name,
-          t.periods,
+          t.time_index ?? null,
           t.prefer_room_ids
         );
       }
