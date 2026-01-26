@@ -11,7 +11,8 @@
     "start": "electron .",
     "dev": "electron .",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "test": "node --test"
   },
   "dependencies": {
     "better-sqlite3": "^11.7.0",

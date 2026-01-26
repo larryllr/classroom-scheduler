@@ -59,14 +59,16 @@ async function apiFetch(url, opts = {}) {
 }
 
 function setStatus(kind, msg) {
-  const box = $("#status");
+  const box = $("#status") || $("#msg");
+  if (!box) return;
   box.className = `status ${kind}`;
   box.textContent = msg;
   box.style.display = "block";
 }
 
 function clearStatus() {
-  const box = $("#status");
+  const box = $("#status") || $("#msg");
+  if (!box) return;
   box.style.display = "none";
 }
 
@@ -827,6 +829,9 @@ function bindSchedule() {
 function buildCalendar(containerSel) {
   const el = $(containerSel);
   if (!el) return;
+  el.style.display = "grid";
+  el.style.gridTemplateColumns = "repeat(7, minmax(0, 1fr))";
+  el.style.gap = "8px";
 
   const now = new Date();
   const y = now.getFullYear();
