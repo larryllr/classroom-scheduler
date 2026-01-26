@@ -104,7 +104,7 @@ select{cursor:pointer}
 .chip{
   padding:6px 10px;border-radius:999px;border:1px solid #d8dbea;background:#fff;cursor:pointer;font-size:12px
 }
-.chip.on{background:var(--blue-soft);border-color:rgba(15,59,130,.3);font-weight:800}
+.chip.on{background:var(--blue);border-color:rgba(15,59,130,.45);color:#fff;font-weight:800}
 .calendarWrap{margin-top:8px}
 .calTitle{font-weight:800;margin-bottom:6px}
 .calendar{display:grid;grid-template-columns:repeat(7,1fr);gap:8px}

@@ -193,7 +193,8 @@ function maskBadges(mask) {
   const chips = [];
   for (let i = 0; i < slots.length; i++) {
     const on = (mask & (1 << i)) !== 0;
-    chips.push(`<span class="chip ${on ? "on" : ""}" data-slot="${i}">${slots[i].start}</span>`);
+    const label = `${slots[i].start}-${slots[i].end}`;
+    chips.push(`<span class="chip ${on ? "on" : ""}" data-slot="${i}">${label}</span>`);
   }
   return chips.join("");
 }
