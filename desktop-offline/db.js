@@ -342,6 +342,7 @@ const api = {
     if (!class_id) return bad(res, "请选择班级");
     if (!teacher_ids.length) return bad(res, "请选择教师");
     if (!time_indexes.length) return bad(res, "请选择时间段");
+    if (teacher_ids.length > time_indexes.length) return bad(res, "时间段数量不足：每位老师至少需要一个时间段");
     if (!dates.length) return bad(res, "请从日历选择至少1个日期");
     if (dates.some((d) => !isDate(d))) return bad(res, "日期格式错误（应为 YYYY-MM-DD）");
     if (time_indexes.some((t) => t < 0 || t >= SLOTS.length)) return bad(res, "时间段不合法");
@@ -358,7 +359,20 @@ const api = {
         )
       : db.prepare("INSERT INTO tasks(class_id,teacher_id,date,time_index,prefer_room_ids) VALUES (?,?,?,?,?)");
 
+    const getConflict = db.prepare(
+      "SELECT id FROM tasks WHERE class_id=? AND date=? AND time_index=? LIMIT 1"
+    );
+    const getTeacherSlot = db.prepare(
+      "SELECT id FROM tasks WHERE teacher_id=? AND date=? AND time_index=? LIMIT 1"
+    );
+    const getTeacherClassDay = db.prepare(
+      "SELECT id FROM tasks WHERE teacher_id=? AND class_id=? AND date=? LIMIT 1"
+    );
+
     const tx = db.transaction(() => {
+      const classSlotSet = new Set();
+      const teacherSlotSet = new Set();
+      const teacherClassDaySet = new Set();
       for (const d of uniq) {
         for (const teacher_id of teacher_ids) {
           const te = db.prepare("SELECT * FROM teachers WHERE id=?").get(teacher_id);
@@ -371,6 +385,24 @@ const api = {
             if ((teacherAvail & (1 << idx)) === 0) {
               throw new Error(`教师「${te.name}」不可上 ${SLOTS[idx]?.start}-${SLOTS[idx]?.end}`);
             }
+            const classSlotKey = `${class_id}-${d}-${idx}`;
+            if (classSlotSet.has(classSlotKey) || getConflict.get(class_id, d, idx)) {
+              throw new Error(`同一班级同一时间段只能安排一位老师（${d} ${SLOTS[idx]?.start}-${SLOTS[idx]?.end}）`);
+            }
+            classSlotSet.add(classSlotKey);
+
+            const teacherSlotKey = `${teacher_id}-${d}-${idx}`;
+            if (teacherSlotSet.has(teacherSlotKey) || getTeacherSlot.get(teacher_id, d, idx)) {
+              throw new Error(`教师「${te.name}」在 ${d} ${SLOTS[idx]?.start}-${SLOTS[idx]?.end} 已有课程`);
+            }
+            teacherSlotSet.add(teacherSlotKey);
+
+            const teacherClassDayKey = `${teacher_id}-${class_id}-${d}`;
+            if (teacherClassDaySet.has(teacherClassDayKey) || getTeacherClassDay.get(teacher_id, class_id, d)) {
+              throw new Error(`教师「${te.name}」与班级「${cls.name}」同一天最多上一节课（${d}）`);
+            }
+            teacherClassDaySet.add(teacherClassDayKey);
+
             if (taskHasCourse) {
               ins.run(class_id, teacher_id, d, idx, prefer_room_ids, te.subject || "");
             } else {
