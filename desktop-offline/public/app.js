@@ -15,6 +15,7 @@ const state = {
   tasks: [],
   activeTab: "rooms",
   selectedDates: new Set(),
+  selectedTeacherIds: new Set(),
 };
 
 function fmtErr(e) {
@@ -301,8 +302,13 @@ function renderTeachers() {
 /* ---------------- Tasks ---------------- */
 function renderTasks() {
   const classOpt = state.classes.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
-  const teacherOpt = state.teachers
-    .map((t) => `<option value="${t.id}">${esc(t.name)}（${esc(t.subject || "未设置科目")}）</option>`)
+  const teacherChips = state.teachers
+    .map((t) => {
+      const picked = state.selectedTeacherIds.has(String(t.id)) ? "on" : "";
+      return `<span class="chip ${picked}" data-teacher="${t.id}">${esc(t.name)}（${esc(
+        t.subject || "未设置科目"
+      )}）</span>`;
+    })
     .join("");
 
   const rows = state.tasks
@@ -326,7 +332,8 @@ function renderTasks() {
       <div class="cardTitle">添加排课任务（用日历批量选日期）</div>
       <div class="form">
         <label>班级<select id="taskClass">${classOpt}</select></label>
-        <label>授课老师（可多选）<select id="taskTeacher" multiple size="6">${teacherOpt}</select></label>
+        <label>授课老师（可多选）</label>
+        <div class="chips" id="taskTeachers">${teacherChips || `<span class="muted">暂无教师</span>`}</div>
         <label>选择时间段（可多选）</label>
         <div class="chips" id="taskSlots">${maskBadges(0)}</div>
 
@@ -468,6 +475,20 @@ function maskToIndexes(mask) {
     if ((mask & (1 << i)) !== 0) idx.push(i);
   }
   return idx;
+}
+
+function bindTeacherChips(containerId) {
+  const el = $(containerId);
+  if (!el) return;
+  el.addEventListener("click", (ev) => {
+    const chip = ev.target.closest(".chip");
+    if (!chip) return;
+    const id = String(chip.dataset.teacher || "");
+    if (!id) return;
+    if (state.selectedTeacherIds.has(id)) state.selectedTeacherIds.delete(id);
+    else state.selectedTeacherIds.add(id);
+    chip.classList.toggle("on", state.selectedTeacherIds.has(id));
+  });
 }
 
 /* Classes binds */
@@ -659,6 +680,7 @@ function openEditTeacher(id) {
 function bindTasks() {
   buildCalendar("#calendar");
   const taskSlots = bindChips("#taskSlots", 0);
+  bindTeacherChips("#taskTeachers");
 
   $("#btnClearDates")?.addEventListener("click", () => {
     state.selectedDates.clear();
@@ -669,9 +691,7 @@ function bindTasks() {
   $("#btnAddTaskDates")?.addEventListener("click", async () => {
     try {
       const class_id = Number($("#taskClass").value);
-      const teacher_ids = Array.from($("#taskTeacher").selectedOptions)
-        .map((o) => Number(o.value))
-        .filter(Boolean);
+      const teacher_ids = Array.from(state.selectedTeacherIds).map((id) => Number(id)).filter(Boolean);
       const time_indexes = maskToIndexes(taskSlots.getMask());
       const dates = Array.from(state.selectedDates);
 
@@ -682,6 +702,7 @@ function bindTasks() {
 
       toast("任务已添加");
       state.selectedDates.clear();
+      state.selectedTeacherIds.clear();
       await loadTasks();
       render();
     } catch (e) {
