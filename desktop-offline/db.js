@@ -92,9 +92,15 @@ function initDb(electronApp) {
       db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${def}`);
     }
   };
+  const hasColumn = (table, column) => {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+    return cols.some((c) => c.name === column);
+  };
   ensureColumn("teachers", "subject", "TEXT");
   ensureColumn("tasks", "time_index", "INTEGER");
+  const taskHasCourse = hasColumn("tasks", "course_name");
 
+  db.__taskHasCourse = taskHasCourse;
   return db;
 }
 
@@ -345,9 +351,12 @@ const api = {
     const classAvail = toInt(cls.avail_mask, FULL_MASK);
 
     const uniq = Array.from(new Set(dates)).sort();
-    const ins = db.prepare(
-      "INSERT INTO tasks(class_id,teacher_id,date,time_index,prefer_room_ids) VALUES (?,?,?,?,?)"
-    );
+    const taskHasCourse = db.__taskHasCourse;
+    const ins = taskHasCourse
+      ? db.prepare(
+          "INSERT INTO tasks(class_id,teacher_id,date,time_index,prefer_room_ids,course_name) VALUES (?,?,?,?,?,?)"
+        )
+      : db.prepare("INSERT INTO tasks(class_id,teacher_id,date,time_index,prefer_room_ids) VALUES (?,?,?,?,?)");
 
     const tx = db.transaction(() => {
       for (const d of uniq) {
@@ -362,7 +371,11 @@ const api = {
             if ((teacherAvail & (1 << idx)) === 0) {
               throw new Error(`教师「${te.name}」不可上 ${SLOTS[idx]?.start}-${SLOTS[idx]?.end}`);
             }
-            ins.run(class_id, teacher_id, d, idx, prefer_room_ids);
+            if (taskHasCourse) {
+              ins.run(class_id, teacher_id, d, idx, prefer_room_ids, te.subject || "");
+            } else {
+              ins.run(class_id, teacher_id, d, idx, prefer_room_ids);
+            }
           }
         }
       }
@@ -662,15 +675,22 @@ const api = {
           t.avail_mask ?? FULL_MASK
         );
       }
+      const taskHasCourse = db.__taskHasCourse;
       for (const t of d.tasks || []) {
-        db.prepare("INSERT INTO tasks(id,class_id,teacher_id,date,time_index,prefer_room_ids) VALUES (?,?,?,?,?,?)").run(
-          t.id,
-          t.class_id,
-          t.teacher_id,
-          t.date,
-          t.time_index ?? null,
-          t.prefer_room_ids
-        );
+        if (taskHasCourse) {
+          db.prepare(
+            "INSERT INTO tasks(id,class_id,teacher_id,date,time_index,prefer_room_ids,course_name) VALUES (?,?,?,?,?,?,?)"
+          ).run(t.id, t.class_id, t.teacher_id, t.date, t.time_index ?? null, t.prefer_room_ids, t.course_name || "");
+        } else {
+          db.prepare("INSERT INTO tasks(id,class_id,teacher_id,date,time_index,prefer_room_ids) VALUES (?,?,?,?,?,?)").run(
+            t.id,
+            t.class_id,
+            t.teacher_id,
+            t.date,
+            t.time_index ?? null,
+            t.prefer_room_ids
+          );
+        }
       }
       for (const s of d.schedule_slots || []) {
         db.prepare("INSERT INTO schedule_slots(id,date,time_index,room_id,class_id,teacher_id,task_id) VALUES (?,?,?,?,?,?,?)").run(
