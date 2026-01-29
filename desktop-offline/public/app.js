@@ -313,7 +313,10 @@ function renderTasks() {
 
   const rows = state.tasks
     .map((t) => {
-      const time = typeof t.time_index === "number" ? slotText(t.time_index) : "";
+      const mask = typeof t.time_mask === "number" && t.time_mask > 0
+        ? t.time_mask
+        : (typeof t.time_index === "number" ? 1 << t.time_index : state.meta?.full_mask ?? 0);
+      const time = maskToLabel(mask);
       return `
       <tr>
         <td>${t.date}</td>
@@ -357,7 +360,7 @@ function renderTasks() {
       </div>
       <div class="tableWrap">
         <table>
-          <thead><tr><th>日期</th><th>班级</th><th>时间段</th><th>教师</th><th>科目</th><th class="right">操作</th></tr></thead>
+          <thead><tr><th>日期</th><th>班级</th><th>可上时间段</th><th>教师</th><th>科目</th><th class="right">操作</th></tr></thead>
           <tbody>${rows || `<tr><td colspan="6" class="muted">暂无任务</td></tr>`}</tbody>
         </table>
       </div>
@@ -475,6 +478,12 @@ function maskToIndexes(mask) {
     if ((mask & (1 << i)) !== 0) idx.push(i);
   }
   return idx;
+}
+
+function maskToLabel(mask) {
+  const indexes = maskToIndexes(mask);
+  if (!indexes.length) return "";
+  return indexes.map((i) => slotText(i)).filter(Boolean).join("、");
 }
 
 function bindTeacherChips(containerId) {

@@ -98,9 +98,12 @@ function initDb(electronApp) {
   };
   ensureColumn("teachers", "subject", "TEXT");
   ensureColumn("tasks", "time_index", "INTEGER");
+  ensureColumn("tasks", "time_mask", "INTEGER");
   const taskHasCourse = hasColumn("tasks", "course_name");
+  const taskHasTimeMask = hasColumn("tasks", "time_mask");
 
   db.__taskHasCourse = taskHasCourse;
+  db.__taskHasTimeMask = taskHasTimeMask;
   return db;
 }
 
@@ -118,6 +121,15 @@ function hasAll(mask, need) {
 }
 function overlapMask(a, b) {
   return (a & b) !== 0;
+}
+function bitCount(mask) {
+  let count = 0;
+  let m = mask;
+  while (m) {
+    count += m & 1;
+    m >>= 1;
+  }
+  return count;
 }
 function isPrefixMask(mask) {
   let sawZero = false;
@@ -341,8 +353,6 @@ const api = {
 
     if (!class_id) return bad(res, "请选择班级");
     if (!teacher_ids.length) return bad(res, "请选择教师");
-    if (!time_indexes.length) return bad(res, "请选择时间段");
-    if (teacher_ids.length > time_indexes.length) return bad(res, "时间段数量不足：每位老师至少需要一个时间段");
     if (!dates.length) return bad(res, "请从日历选择至少1个日期");
     if (dates.some((d) => !isDate(d))) return bad(res, "日期格式错误（应为 YYYY-MM-DD）");
     if (time_indexes.some((t) => t < 0 || t >= SLOTS.length)) return bad(res, "时间段不合法");
@@ -353,61 +363,37 @@ const api = {
 
     const uniq = Array.from(new Set(dates)).sort();
     const taskHasCourse = db.__taskHasCourse;
+    const taskHasTimeMask = db.__taskHasTimeMask;
+    const toMask = (indexes) => {
+      let mask = 0;
+      for (const idx of indexes) mask |= 1 << idx;
+      return mask || FULL_MASK;
+    };
+    const time_mask = toMask(time_indexes);
     const ins = taskHasCourse
       ? db.prepare(
-          "INSERT INTO tasks(class_id,teacher_id,date,time_index,prefer_room_ids,course_name) VALUES (?,?,?,?,?,?)"
+          "INSERT INTO tasks(class_id,teacher_id,date,time_index,time_mask,prefer_room_ids,course_name) VALUES (?,?,?,?,?,?,?)"
         )
-      : db.prepare("INSERT INTO tasks(class_id,teacher_id,date,time_index,prefer_room_ids) VALUES (?,?,?,?,?)");
-
-    const getConflict = db.prepare(
-      "SELECT id FROM tasks WHERE class_id=? AND date=? AND time_index=? LIMIT 1"
-    );
-    const getTeacherSlot = db.prepare(
-      "SELECT id FROM tasks WHERE teacher_id=? AND date=? AND time_index=? LIMIT 1"
-    );
-    const getTeacherClassDay = db.prepare(
-      "SELECT id FROM tasks WHERE teacher_id=? AND class_id=? AND date=? LIMIT 1"
-    );
+      : taskHasTimeMask
+        ? db.prepare("INSERT INTO tasks(class_id,teacher_id,date,time_index,time_mask,prefer_room_ids) VALUES (?,?,?,?,?,?)")
+        : db.prepare("INSERT INTO tasks(class_id,teacher_id,date,time_index,prefer_room_ids) VALUES (?,?,?,?,?)");
 
     const tx = db.transaction(() => {
-      const classSlotSet = new Set();
-      const teacherSlotSet = new Set();
-      const teacherClassDaySet = new Set();
       for (const d of uniq) {
         for (const teacher_id of teacher_ids) {
           const te = db.prepare("SELECT * FROM teachers WHERE id=?").get(teacher_id);
           if (!te) throw new Error("教师不存在");
           const teacherAvail = toInt(te.avail_mask, FULL_MASK);
-          for (const idx of time_indexes) {
-            if ((classAvail & (1 << idx)) === 0) {
-              throw new Error(`班级「${cls.name}」不可上 ${SLOTS[idx]?.start}-${SLOTS[idx]?.end}`);
-            }
-            if ((teacherAvail & (1 << idx)) === 0) {
-              throw new Error(`教师「${te.name}」不可上 ${SLOTS[idx]?.start}-${SLOTS[idx]?.end}`);
-            }
-            const classSlotKey = `${class_id}-${d}-${idx}`;
-            if (classSlotSet.has(classSlotKey) || getConflict.get(class_id, d, idx)) {
-              throw new Error(`同一班级同一时间段只能安排一位老师（${d} ${SLOTS[idx]?.start}-${SLOTS[idx]?.end}）`);
-            }
-            classSlotSet.add(classSlotKey);
-
-            const teacherSlotKey = `${teacher_id}-${d}-${idx}`;
-            if (teacherSlotSet.has(teacherSlotKey) || getTeacherSlot.get(teacher_id, d, idx)) {
-              throw new Error(`教师「${te.name}」在 ${d} ${SLOTS[idx]?.start}-${SLOTS[idx]?.end} 已有课程`);
-            }
-            teacherSlotSet.add(teacherSlotKey);
-
-            const teacherClassDayKey = `${teacher_id}-${class_id}-${d}`;
-            if (teacherClassDaySet.has(teacherClassDayKey) || getTeacherClassDay.get(teacher_id, class_id, d)) {
-              throw new Error(`教师「${te.name}」与班级「${cls.name}」同一天最多上一节课（${d}）`);
-            }
-            teacherClassDaySet.add(teacherClassDayKey);
-
-            if (taskHasCourse) {
-              ins.run(class_id, teacher_id, d, idx, prefer_room_ids, te.subject || "");
-            } else {
-              ins.run(class_id, teacher_id, d, idx, prefer_room_ids);
-            }
+          const allowedMask = time_mask & classAvail & teacherAvail;
+          if (!allowedMask) {
+            throw new Error(`班级「${cls.name}」与教师「${te.name}」没有可用时间段`);
+          }
+          if (taskHasCourse) {
+            ins.run(class_id, teacher_id, d, null, time_mask, prefer_room_ids, te.subject || "");
+          } else if (taskHasTimeMask) {
+            ins.run(class_id, teacher_id, d, null, time_mask, prefer_room_ids);
+          } else {
+            ins.run(class_id, teacher_id, d, null, prefer_room_ids);
           }
         }
       }
@@ -445,7 +431,7 @@ const api = {
         FROM tasks t
         LEFT JOIN classes c ON c.id=t.class_id
         LEFT JOIN teachers te ON te.id=t.teacher_id
-        ORDER BY t.date ASC, t.time_index ASC, t.id ASC
+        ORDER BY t.date ASC, t.id ASC
       `
       )
       .all();
@@ -458,14 +444,12 @@ const api = {
     for (const t of tasks) {
       if (!t.class_name) return bad(res, `存在任务引用了不存在的班级（task_id=${t.id}）`);
       if (!t.teacher_name) return bad(res, `存在任务引用了不存在的教师（task_id=${t.id}）`);
-      if (t.time_index == null || t.time_index < 0 || t.time_index >= SLOTS.length) {
-        return bad(res, `任务缺少时间段（task_id=${t.id}）`);
-      }
     }
 
     const roomOcc = {};    // roomOcc[date][roomId] = mask
     const teacherOcc = {}; // teacherOcc[date][teacherId] = mask
     const classOcc = {};   // classOcc[date][classId] = mask
+    const teacherClassDay = {}; // teacherClassDay[date][teacherId] = Set(classId)
 
     function getOcc(map, date, id) {
       map[date] ||= {};
@@ -476,6 +460,32 @@ const api = {
     function setOcc(map, date, id, mask) {
       map[date] ||= {};
       map[date][String(id)] = mask;
+    }
+    function getTeacherClassSet(date, teacherId) {
+      teacherClassDay[date] ||= {};
+      const key = String(teacherId);
+      if (!teacherClassDay[date][key]) teacherClassDay[date][key] = new Set();
+      return teacherClassDay[date][key];
+    }
+
+    function taskAllowedMask(t) {
+      let taskMask = FULL_MASK;
+      if (Number.isFinite(t.time_mask) && t.time_mask > 0) {
+        taskMask = t.time_mask;
+      } else if (Number.isFinite(t.time_index) && t.time_index >= 0) {
+        taskMask = 1 << t.time_index;
+      }
+      return taskMask & toInt(t.class_avail_mask, FULL_MASK) & toInt(t.teacher_avail_mask, FULL_MASK);
+    }
+    function preferredSlots(mask) {
+      const order = [];
+      const noonSlot = 3;
+      if ((mask & (1 << noonSlot)) !== 0) order.push(noonSlot);
+      for (let i = 0; i < SLOTS.length; i++) {
+        if (i === noonSlot) continue;
+        if ((mask & (1 << i)) !== 0) order.push(i);
+      }
+      return order;
     }
 
     const delAll = db.prepare("DELETE FROM schedule_slots");
@@ -501,74 +511,110 @@ const api = {
       delAll.run();
 
       for (const list of fixedGroups.values()) {
-        list.sort((a, b) => a.time_index - b.time_index);
+        list.sort((a, b) => {
+          const aMask = taskAllowedMask(a);
+          const bMask = taskAllowedMask(b);
+          const aCount = bitCount(aMask);
+          const bCount = bitCount(bMask);
+          return aCount - bCount || a.id - b.id;
+        });
         const cls = list[0];
         const classId = Number(cls.class_id);
         const size = Number(cls.class_size);
         const date = cls.date;
 
         let chosenRoom = null;
+        let chosenAssignments = null;
         for (const room of orderedRoomsForClass(cls)) {
           if (room.capacity < size) continue;
+          const assignments = [];
           let ok = true;
           for (const t of list) {
-            const slot = Number(t.time_index);
-            const classOccMask = getOcc(classOcc, date, classId);
-            const roomOccMask = getOcc(roomOcc, date, room.id);
-            const teacherOccMask = getOcc(teacherOcc, date, t.teacher_id);
-            if (overlapMask(classOccMask, 1 << slot)) { ok = false; break; }
-            if (overlapMask(roomOccMask, 1 << slot)) { ok = false; break; }
-            if (overlapMask(teacherOccMask, 1 << slot)) { ok = false; break; }
+            const allowed = taskAllowedMask(t);
+            if (!allowed) { ok = false; break; }
+            const slotOrder = preferredSlots(allowed);
+            let placed = false;
+            for (const slot of slotOrder) {
+              const classOccMask = getOcc(classOcc, date, classId);
+              const roomOccMask = getOcc(roomOcc, date, room.id);
+              const teacherOccMask = getOcc(teacherOcc, date, t.teacher_id);
+              const teacherClassSet = getTeacherClassSet(date, t.teacher_id);
+              if (overlapMask(classOccMask, 1 << slot)) continue;
+              if (overlapMask(roomOccMask, 1 << slot)) continue;
+              if (overlapMask(teacherOccMask, 1 << slot)) continue;
+              if (teacherClassSet.has(classId)) continue;
+              assignments.push({ task: t, slot });
+              placed = true;
+              break;
+            }
+            if (!placed) { ok = false; break; }
           }
-          if (ok) { chosenRoom = room; break; }
+          if (ok) {
+            chosenRoom = room;
+            chosenAssignments = assignments;
+            break;
+          }
         }
 
-        if (!chosenRoom) {
+        if (!chosenRoom || !chosenAssignments) {
           throw new Error(`无可行解：${date}（${cls.class_name}）设置为“同日固定教室”，但无法找到满足容量/冲突的教室。`);
         }
 
-        for (const t of list) {
-          const slot = Number(t.time_index);
+        for (const item of chosenAssignments) {
+          const t = item.task;
+          const slot = item.slot;
           const teacherId = Number(t.teacher_id);
           const classOccMask = getOcc(classOcc, date, classId);
           const roomOccMask = getOcc(roomOcc, date, chosenRoom.id);
           const teacherOccMask = getOcc(teacherOcc, date, teacherId);
+          const teacherClassSet = getTeacherClassSet(date, teacherId);
           if (overlapMask(classOccMask, 1 << slot) || overlapMask(roomOccMask, 1 << slot) || overlapMask(teacherOccMask, 1 << slot)) {
             throw new Error(`无可行解：${date}（${t.class_name} - ${t.teacher_name}）时间段冲突。`);
+          }
+          if (teacherClassSet.has(classId)) {
+            throw new Error(`无可行解：${date}（${t.class_name} - ${t.teacher_name}）同一天最多上一节课。`);
           }
           setOcc(classOcc, date, classId, classOccMask | (1 << slot));
           setOcc(roomOcc, date, chosenRoom.id, roomOccMask | (1 << slot));
           setOcc(teacherOcc, date, teacherId, teacherOccMask | (1 << slot));
+          teacherClassSet.add(classId);
           insSlot.run(date, slot, chosenRoom.id, classId, teacherId, t.id);
         }
       }
 
       for (const t of flexTasks) {
-        const slot = Number(t.time_index);
         const date = t.date;
         const classId = Number(t.class_id);
         const teacherId = Number(t.teacher_id);
-        const classOccMask = getOcc(classOcc, date, classId);
-        const teacherOccMask = getOcc(teacherOcc, date, teacherId);
-        if (overlapMask(classOccMask, 1 << slot) || overlapMask(teacherOccMask, 1 << slot)) {
-          throw new Error(`无可行解：${date}（${t.class_name} - ${t.teacher_name}）时间段冲突。`);
+        const allowed = taskAllowedMask(t);
+        if (!allowed) {
+          throw new Error(`无可行解：${date}（${t.class_name} - ${t.teacher_name}）没有可用时间段。`);
         }
-
+        const slotOrder = preferredSlots(allowed);
         let placed = false;
-        for (const room of orderedRoomsForClass(t)) {
-          if (room.capacity < t.class_size) continue;
-          const roomOccMask = getOcc(roomOcc, date, room.id);
-          if (overlapMask(roomOccMask, 1 << slot)) continue;
-          setOcc(classOcc, date, classId, classOccMask | (1 << slot));
-          setOcc(roomOcc, date, room.id, roomOccMask | (1 << slot));
-          setOcc(teacherOcc, date, teacherId, teacherOccMask | (1 << slot));
-          insSlot.run(date, slot, room.id, classId, teacherId, t.id);
-          placed = true;
-          break;
+        for (const slot of slotOrder) {
+          const classOccMask = getOcc(classOcc, date, classId);
+          const teacherOccMask = getOcc(teacherOcc, date, teacherId);
+          if (overlapMask(classOccMask, 1 << slot) || overlapMask(teacherOccMask, 1 << slot)) continue;
+          const teacherClassSet = getTeacherClassSet(date, teacherId);
+          if (teacherClassSet.has(classId)) continue;
+          for (const room of orderedRoomsForClass(t)) {
+            if (room.capacity < t.class_size) continue;
+            const roomOccMask = getOcc(roomOcc, date, room.id);
+            if (overlapMask(roomOccMask, 1 << slot)) continue;
+            setOcc(classOcc, date, classId, classOccMask | (1 << slot));
+            setOcc(roomOcc, date, room.id, roomOccMask | (1 << slot));
+            setOcc(teacherOcc, date, teacherId, teacherOccMask | (1 << slot));
+            teacherClassSet.add(classId);
+            insSlot.run(date, slot, room.id, classId, teacherId, t.id);
+            placed = true;
+            break;
+          }
+          if (placed) break;
         }
 
         if (!placed) {
-          throw new Error(`无可行解：${date}（${t.class_name} - ${t.teacher_name}）无法安排该时间段：可能是教室容量不足/时间段冲突。`);
+          throw new Error(`无可行解：${date}（${t.class_name} - ${t.teacher_name}）无法安排该任务。`);
         }
       }
     });
@@ -708,11 +754,25 @@ const api = {
         );
       }
       const taskHasCourse = db.__taskHasCourse;
+      const taskHasTimeMask = db.__taskHasTimeMask;
       for (const t of d.tasks || []) {
         if (taskHasCourse) {
           db.prepare(
-            "INSERT INTO tasks(id,class_id,teacher_id,date,time_index,prefer_room_ids,course_name) VALUES (?,?,?,?,?,?,?)"
-          ).run(t.id, t.class_id, t.teacher_id, t.date, t.time_index ?? null, t.prefer_room_ids, t.course_name || "");
+            "INSERT INTO tasks(id,class_id,teacher_id,date,time_index,time_mask,prefer_room_ids,course_name) VALUES (?,?,?,?,?,?,?,?)"
+          ).run(
+            t.id,
+            t.class_id,
+            t.teacher_id,
+            t.date,
+            t.time_index ?? null,
+            t.time_mask ?? null,
+            t.prefer_room_ids,
+            t.course_name || ""
+          );
+        } else if (taskHasTimeMask) {
+          db.prepare(
+            "INSERT INTO tasks(id,class_id,teacher_id,date,time_index,time_mask,prefer_room_ids) VALUES (?,?,?,?,?,?,?)"
+          ).run(t.id, t.class_id, t.teacher_id, t.date, t.time_index ?? null, t.time_mask ?? null, t.prefer_room_ids);
         } else {
           db.prepare("INSERT INTO tasks(id,class_id,teacher_id,date,time_index,prefer_room_ids) VALUES (?,?,?,?,?,?)").run(
             t.id,
